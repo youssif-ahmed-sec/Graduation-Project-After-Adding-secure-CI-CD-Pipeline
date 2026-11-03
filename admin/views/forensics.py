@@ -74,7 +74,7 @@ class ForensicsView(ctk.CTkFrame):
 
         self.load_evidence_list()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -103,7 +103,7 @@ class ForensicsView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.all_threats = res.json().get("data", [])
                     for alert in self.all_threats:
@@ -122,7 +122,7 @@ class ForensicsView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.all_threats = res.json().get("data", [])
                     if self.winfo_exists(): self.after(0, lambda: self.render_sidebar_list(self.all_threats))
@@ -244,7 +244,7 @@ class ForensicsView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.get(f"{SERVER_URL}/evidence/{filename}", headers={"X-Admin-Token": token}, verify=False, timeout=15)
+                res = requests.get(f"{SERVER_URL}/evidence/{filename}", headers={"X-Admin-Token": token}, verify=True, timeout=15)
                 if res.status_code == 200:
                     img_data = Image.open(io.BytesIO(res.content))
                     w, h = img_data.size
@@ -308,7 +308,7 @@ class ForensicsView(ctk.CTkFrame):
                 headers = {"X-Admin-Token": token, "Content-Type": "application/json"}
                 payload = {"agent_id": agent_id, "action": action_cmd}
 
-                res = requests.post(f"{SERVER_URL}/api/v1/admin/emergency_action", json=payload, headers=headers, verify=False, timeout=10)
+                res = requests.post(f"{SERVER_URL}/api/v1/admin/emergency_action", json=payload, headers=headers, verify=True, timeout=10)
 
                 if res.status_code == 200:
                     if is_restoring:
@@ -336,7 +336,7 @@ class ForensicsView(ctk.CTkFrame):
         self.export_btn.configure(text="⏳ Generating...")
         def task():
             try:
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/generate_report/{log_id}", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=False)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/generate_report/{log_id}", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=True)
                 if res.status_code == 200:
                     with open(save_path, 'wb') as f: f.write(res.content)
                     self.after(0, lambda: messagebox.showinfo("Done", "Forensic Report Saved."))

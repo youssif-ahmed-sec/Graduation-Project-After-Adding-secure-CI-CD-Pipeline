@@ -50,7 +50,7 @@ class HoneyFilesView(ctk.CTkFrame):
 
         self.refresh_list()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -78,7 +78,7 @@ class HoneyFilesView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/honeyfiles", headers={"X-Admin-Token": token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/honeyfiles", headers={"X-Admin-Token": token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.files_data = res.json().get("data", [])
                     self.after(0, self.render_cards)
@@ -189,7 +189,7 @@ class HoneyFilesView(ctk.CTkFrame):
 
         def fetch_agents():
             try:
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/agents", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=False)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/agents", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=True)
                 if res.status_code == 200:
                     agents = [a['agent_id'] for a in res.json().get('data', [])]
                     modal.after(0, lambda: agent_menu.configure(values=["ALL"] + agents))
@@ -222,7 +222,7 @@ class HoneyFilesView(ctk.CTkFrame):
             def task():
                 try:
                     token = getattr(self.winfo_toplevel(), 'session_token', '')
-                    res = requests.post(f"{SERVER_URL}/api/v1/admin/honeyfiles", json=payload, headers={"X-Admin-Token": token}, verify=False, timeout=5)
+                    res = requests.post(f"{SERVER_URL}/api/v1/admin/honeyfiles", json=payload, headers={"X-Admin-Token": token}, verify=True, timeout=5)
                     if res.status_code == 200:
                         self.after(0, modal.destroy)
                         self.after(500, self.refresh_list)
@@ -281,9 +281,9 @@ class HoneyFilesView(ctk.CTkFrame):
             def fetch():
                 try:
                     token = getattr(self.winfo_toplevel(), 'session_token', '')
-                    requests.post(f"{SERVER_URL}/api/v1/admin/set_task", json={"agent_id": agent_id, "task": {"command": "LS", "path": target_path}}, headers={"X-Admin-Token": token}, verify=False, timeout=5)
+                    requests.post(f"{SERVER_URL}/api/v1/admin/set_task", json={"agent_id": agent_id, "task": {"command": "LS", "path": target_path}}, headers={"X-Admin-Token": token}, verify=True, timeout=5)
                     time.sleep(2)
-                    res = requests.get(f"{SERVER_URL}/api/v1/admin/get_browse_results/{agent_id}", headers={"X-Admin-Token": token}, verify=False)
+                    res = requests.get(f"{SERVER_URL}/api/v1/admin/get_browse_results/{agent_id}", headers={"X-Admin-Token": token}, verify=True)
                     if res.status_code == 200:
                         data = res.json().get("data", {})
                         if data and browser.winfo_exists(): self.after(0, lambda d=data: update_ui(d))
@@ -335,7 +335,7 @@ class HoneyFilesView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.delete(f"{SERVER_URL}/api/v1/admin/honeyfiles", json={"agent_id": agent_id, "path": path}, headers={"X-Admin-Token": token}, verify=False, timeout=5)
+                res = requests.delete(f"{SERVER_URL}/api/v1/admin/honeyfiles", json={"agent_id": agent_id, "path": path}, headers={"X-Admin-Token": token}, verify=True, timeout=5)
                 if res.status_code == 200: self.after(0, self.refresh_list)
             except: pass
         threading.Thread(target=task, daemon=True).start()

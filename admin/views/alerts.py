@@ -96,7 +96,7 @@ class AlertsView(ctk.CTkFrame):
 
         self.refresh_list()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -124,7 +124,7 @@ class AlertsView(ctk.CTkFrame):
 
         def task(auth_token):
             try:
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": auth_token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": auth_token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.threats_data = res.json().get("data", [])
                     self.after(0, self.render_cards)

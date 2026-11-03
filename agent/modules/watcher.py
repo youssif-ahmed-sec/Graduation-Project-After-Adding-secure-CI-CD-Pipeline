@@ -152,7 +152,7 @@ class HoneyFileHandler(FileSystemEventHandler):
                         upload_url = f"{self.agent.base_url}/upload_artifact"
                         headers = {"Authorization": self.agent.get_secure_headers()["Authorization"]}
 
-                        requests.post(upload_url, files=files, data=data, headers=headers, verify=False, timeout=120)
+                        requests.post(upload_url, files=files, data=data, headers=headers, verify=True, timeout=120)
                 except Exception as e:
                     print(f"   [-] Failed to upload artifact {ev_type}: {e}")
 
@@ -173,7 +173,7 @@ class HoneyFileHandler(FileSystemEventHandler):
             }
             try:
                 requests.post(f"{self.agent.base_url}/log_threat",
-                              json=alert_payload, headers=self.agent.get_secure_headers(), verify=False, timeout=60)
+                              json=alert_payload, headers=self.agent.get_secure_headers(), verify=True, timeout=60)
                 print("   [+] Threat Log successfully dispatched to centralized C2.")
             except: pass
 

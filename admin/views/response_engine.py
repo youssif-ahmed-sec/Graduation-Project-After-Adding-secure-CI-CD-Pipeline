@@ -53,7 +53,7 @@ class ResponseEngineView(ctk.CTkFrame):
 
         self.load_policies()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -116,7 +116,7 @@ class ResponseEngineView(ctk.CTkFrame):
         token = getattr(self.winfo_toplevel(), 'session_token', '')
         def task(auth_token):
             try:
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/policies", headers={"X-Admin-Token": auth_token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/policies", headers={"X-Admin-Token": auth_token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.after(0, lambda: self.apply_loaded_data(res.json().get("data", {})))
             except: pass
@@ -146,7 +146,7 @@ class ResponseEngineView(ctk.CTkFrame):
         token = getattr(self.winfo_toplevel(), 'session_token', '')
         def task(auth_token):
             try:
-                requests.post(f"{SERVER_URL}/api/v1/admin/policies", json=payload, headers={"X-Admin-Token": auth_token}, verify=False, timeout=10)
+                requests.post(f"{SERVER_URL}/api/v1/admin/policies", json=payload, headers={"X-Admin-Token": auth_token}, verify=True, timeout=10)
             except: pass
             finally: self.after(0, lambda: self.save_btn.configure(state="normal", text="💾 Deploy Policies"))
         threading.Thread(target=task, args=(token,), daemon=True).start()

@@ -42,7 +42,7 @@ class DashboardView(ctk.CTkFrame):
 
         self.refresh_dashboard()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -79,8 +79,8 @@ class DashboardView(ctk.CTkFrame):
         def task(auth_token):
             try:
                 headers = {"X-Admin-Token": auth_token}
-                a_res = requests.get(f"{SERVER_URL}/api/v1/admin/agents", headers=headers, timeout=10, verify=False)
-                t_res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers=headers, timeout=10, verify=False)
+                a_res = requests.get(f"{SERVER_URL}/api/v1/admin/agents", headers=headers, timeout=10, verify=True)
+                t_res = requests.get(f"{SERVER_URL}/api/v1/admin/threats", headers=headers, timeout=10, verify=True)
                 if a_res.status_code == 200 and t_res.status_code == 200:
                     self.after(0, self._safe_ui_update, a_res.json().get("data", []), t_res.json().get("data", []))
             except: pass
@@ -103,7 +103,7 @@ class DashboardView(ctk.CTkFrame):
         token = getattr(self.winfo_toplevel(), 'session_token', '')
         def task(auth_token):
             try:
-                requests.delete(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": auth_token}, timeout=15, verify=False)
+                requests.delete(f"{SERVER_URL}/api/v1/admin/threats", headers={"X-Admin-Token": auth_token}, timeout=15, verify=True)
                 self.after(0, lambda: setattr(self, 'last_threat_count', 0))
             except: pass
             finally:

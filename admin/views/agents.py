@@ -40,7 +40,7 @@ class AgentsView(ctk.CTkFrame):
 
         self.fetch_agents_from_server()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -72,7 +72,7 @@ class AgentsView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/agents", headers={"X-Admin-Token": token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/agents", headers={"X-Admin-Token": token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.real_agents_data = res.json().get("data", [])
             except: pass
@@ -146,7 +146,7 @@ class AgentsView(ctk.CTkFrame):
         def task():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.post(f"{SERVER_URL}/api/v1/admin/set_task", json={"agent_id": agent_id, "task": {"command": "SHUTDOWN_AGENT"}}, headers={"X-Admin-Token": token}, verify=False, timeout=15)
+                res = requests.post(f"{SERVER_URL}/api/v1/admin/set_task", json={"agent_id": agent_id, "task": {"command": "SHUTDOWN_AGENT"}}, headers={"X-Admin-Token": token}, verify=True, timeout=15)
                 if res.status_code == 200 and self.winfo_exists():
                     self.after(0, lambda: messagebox.showinfo("Sent", f"Shutdown queued for {agent_id}."))
             except: pass

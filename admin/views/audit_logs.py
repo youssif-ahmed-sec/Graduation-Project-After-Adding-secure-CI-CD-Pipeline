@@ -66,7 +66,7 @@ class AuditLogsView(ctk.CTkFrame):
             res = requests.get(
                 f"{SERVER_URL}/api/v1/admin/audit_logs",
                 headers={"X-Admin-Token": token},
-                verify=False,
+                verify=True,
                 timeout=10
             )
 

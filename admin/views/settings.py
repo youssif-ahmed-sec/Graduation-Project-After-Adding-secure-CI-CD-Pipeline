@@ -29,7 +29,7 @@ class SettingsView(ctk.CTkFrame):
         self.build_ai_tab()
         self.build_system_tab()
 
-        self.sio = socketio.Client(ssl_verify=False)
+        self.sio = socketio.Client(ssl_verify=True)
         self._setup_websocket_events()
         self.after(1000, self._connect_websocket)
 
@@ -73,7 +73,7 @@ class SettingsView(ctk.CTkFrame):
         def fetch():
             try:
                 token = getattr(self.winfo_toplevel(), 'session_token', '')
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/users", headers={"X-Admin-Token": token}, verify=False, timeout=10)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/users", headers={"X-Admin-Token": token}, verify=True, timeout=10)
                 if res.status_code == 200:
                     self.after(0, lambda: self.render_admin_cards(res.json().get("data", [])))
             except: pass
@@ -130,7 +130,7 @@ class SettingsView(ctk.CTkFrame):
     def load_ai_config(self):
         def task():
             try:
-                res = requests.get(f"{SERVER_URL}/api/v1/admin/ai_settings", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=False, timeout=5)
+                res = requests.get(f"{SERVER_URL}/api/v1/admin/ai_settings", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=True, timeout=5)
                 if res.status_code == 200:
                     data = res.json()
                     self.after(0, lambda: [self.api_key_entry.delete(0, 'end'), self.api_key_entry.insert(0, data.get("api_key", "")), self.ai_model_var.set(data.get("model", "gemini-2.5-flash"))])
@@ -142,7 +142,7 @@ class SettingsView(ctk.CTkFrame):
         payload = {"api_key": self.api_key_entry.get().strip(), "model": self.ai_model_var.get()}
         def task():
             try:
-                res = requests.post(f"{SERVER_URL}/api/v1/admin/ai_settings", json=payload, headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=False, timeout=5)
+                res = requests.post(f"{SERVER_URL}/api/v1/admin/ai_settings", json=payload, headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=True, timeout=5)
                 if res.status_code == 200: self.after(0, lambda: self.save_ai_btn.configure(text="✅ Config Updated", fg_color=Colors.SUCCESS))
             except: pass
             finally: self.after(2000, lambda: self.save_ai_btn.configure(state="normal", text="💾 Update AI Configuration", fg_color=Colors.ACCENT_BLUE))
@@ -203,7 +203,7 @@ class SettingsView(ctk.CTkFrame):
             token = getattr(self.winfo_toplevel(), 'session_token', '')
             payload = {"username": u_entry.get(), "password": p_entry.get(), "role": role_var.get()}
             try:
-                res = requests.post(f"{SERVER_URL}/api/v1/admin/users", json=payload, headers={"X-Admin-Token": token}, verify=False)
+                res = requests.post(f"{SERVER_URL}/api/v1/admin/users", json=payload, headers={"X-Admin-Token": token}, verify=True)
                 if res.status_code == 201:
                     modal.destroy()
                     self.refresh_admins_list()
@@ -228,7 +228,7 @@ class SettingsView(ctk.CTkFrame):
             token = getattr(self.winfo_toplevel(), 'session_token', '')
             payload = {"username": username, "new_password": new_p.get()}
             try:
-                res = requests.put(f"{SERVER_URL}/api/v1/admin/users/password", json=payload, headers={"X-Admin-Token": token}, verify=False)
+                res = requests.put(f"{SERVER_URL}/api/v1/admin/users/password", json=payload, headers={"X-Admin-Token": token}, verify=True)
                 if res.status_code == 200:
                     modal.destroy()
             except: pass
@@ -236,5 +236,5 @@ class SettingsView(ctk.CTkFrame):
         ctk.CTkButton(modal, text="UPDATE PASSWORD", fg_color=Colors.WARNING, hover_color=Colors.WARNING, text_color=Colors.TEXT_PRIMARY, width=320, height=45, font=Fonts.H3, command=update).pack(pady=(20, 10))
 
     def delete_admin_logic(self, username):
-        requests.delete(f"{SERVER_URL}/api/v1/admin/users/{username}", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=False)
+        requests.delete(f"{SERVER_URL}/api/v1/admin/users/{username}", headers={"X-Admin-Token": getattr(self.winfo_toplevel(), 'session_token', '')}, verify=True)
         self.refresh_admins_list()
