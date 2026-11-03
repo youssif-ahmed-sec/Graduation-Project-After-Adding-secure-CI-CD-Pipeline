@@ -1,0 +1,33 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+**/config.json
+
+# Private credentials
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Forensic evidence
+**/evidence/
+**/*.shutdown_signal
+
+# Local databases and logs
+*.db
+*.sqlite3
+*.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

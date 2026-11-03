@@ -1,0 +1,73 @@
+name: FileTrack Security Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security-tests:
+    name: Python Security Regression Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile \
+            agent/security.py \
+            agent/client.py \
+            agent/modules/response_engine.py \
+            server/security.py \
+            server/app.py
+
+      - name: Run security regression tests
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p "test_*.py" \
+            -v
+
+  secret-scanning:
+    name: Gitleaks Secret Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Gitleaks
+        run: |
+          set -euo pipefail
+
+          VERSION="8.30.1"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
+
+          curl -fsSL -o gitleaks.tar.gz \
+            "${BASE_URL}/gitleaks_${VERSION}_linux_x64.tar.gz"
+
+          curl -fsSL -o checksums.txt \
+            "${BASE_URL}/gitleaks_${VERSION}_checksums.txt"
+
+          grep "gitleaks_${VERSION}_linux_x64.tar.gz" checksums.txt \
+            | sha256sum --check
+
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf gitleaks.tar.gz -C "$HOME/.local/bin" gitleaks
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Scan repository files
+        run: |
+          gitleaks dir . --redact --no-banner

@@ -1,0 +1,10 @@
+# PyInstaller Build files
+FileTrack_Agent.spec
+build/
+dist/
+
+# Python Cache & Logs
+__pycache__/
+*.pyc
+*.log
+.shutdown_signal

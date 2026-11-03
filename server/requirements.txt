@@ -1,0 +1,10 @@
+Flask
+Flask-SocketIO
+gevent
+Werkzeug
+PyJWT
+pyotp
+psycopg2-binary
+Pillow
+google-genai
+pdfkit

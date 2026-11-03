@@ -1,0 +1,10 @@
+customtkinter
+Pillow
+requests
+urllib3
+python-socketio
+websocket-client
+winotify
+plyer
+google-generativeai
+typing-extensions
