@@ -47,25 +47,22 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
       - name: Install Gitleaks
         run: |
           set -euo pipefail
 
           VERSION="8.30.1"
+          ARCHIVE="gitleaks_${VERSION}_linux_x64.tar.gz"
           BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
 
-          curl -fsSL -o gitleaks.tar.gz \
-            "${BASE_URL}/gitleaks_${VERSION}_linux_x64.tar.gz"
-
+          curl -fsSL -o "$ARCHIVE" "${BASE_URL}/${ARCHIVE}"
           curl -fsSL -o checksums.txt \
             "${BASE_URL}/gitleaks_${VERSION}_checksums.txt"
 
-          grep "gitleaks_${VERSION}_linux_x64.tar.gz" checksums.txt \
-            | sha256sum --check
+          grep " ${ARCHIVE}$" checksums.txt | sha256sum --check
 
           mkdir -p "$HOME/.local/bin"
-          tar -xzf gitleaks.tar.gz -C "$HOME/.local/bin" gitleaks
+          tar -xzf "$ARCHIVE" -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Scan repository files
