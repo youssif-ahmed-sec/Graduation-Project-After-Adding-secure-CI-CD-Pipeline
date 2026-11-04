@@ -276,6 +276,99 @@ class DBManager:
         )
         return True
 
+    def incident_exists_for_agent(self, log_id, agent_id):
+        """Check whether an incident belongs to the supplied agent."""
+        if type(log_id) is not int or log_id <= 0:
+            return False
+
+        if not agent_id:
+            return False
+
+        row = self._execute_query(
+            """
+            SELECT log_id
+            FROM threat_logs
+            WHERE log_id = %s AND agent_id = %s
+            LIMIT 1
+            """,
+            (log_id, agent_id),
+            fetch="one",
+        )
+
+        return row is not None
+
+    def attach_artifact_to_log(self, log_id, agent_id, file_path, artifact_type):
+        """Attach evidence to a specific incident atomically."""
+        column_map = {
+            "screenshot": "screenshot_path",
+            "camera": "camera_path",
+            "audio": "audio_path",
+            "dump": "dump_path",
+        }
+
+        if artifact_type not in column_map:
+            raise ValueError("Unsupported artifact type")
+
+        if type(log_id) is not int or log_id <= 0:
+            raise ValueError("Invalid log_id")
+
+        if not agent_id or not file_path:
+            raise ValueError("Missing agent or evidence filename")
+
+        column = column_map[artifact_type]
+
+        conn = self._get_connection()
+        cursor = None
+
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                f"""
+                SELECT {column}
+                FROM threat_logs
+                WHERE log_id = %s AND agent_id = %s
+                FOR UPDATE
+                """,
+                (log_id, agent_id),
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                conn.rollback()
+                return False
+
+            existing = [
+                name.strip()
+                for name in (row[column] or "").split(",")
+                if name.strip()
+            ]
+
+            if file_path not in existing:
+                existing.append(file_path)
+
+                cursor.execute(
+                    f"""
+                    UPDATE threat_logs
+                    SET {column} = %s
+                    WHERE log_id = %s AND agent_id = %s
+                    """,
+                    (",".join(existing), log_id, agent_id),
+                )
+
+            conn.commit()
+            return True
+
+        except Exception:
+            conn.rollback()
+            raise
+
+        finally:
+            if cursor is not None:
+                cursor.close()
+            conn.close()
+
     def save_policy(self, level, actions_list):
         self._execute_query('INSERT INTO response_policies (level, actions_json) VALUES (%s, %s) ON CONFLICT (level) DO UPDATE SET actions_json = EXCLUDED.actions_json', (level, json.dumps(actions_list)))
 

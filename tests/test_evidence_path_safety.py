@@ -648,12 +648,13 @@ class TestEvidencePathSafety(unittest.TestCase):
                     namespace["EVIDENCE_FOLDER"] = temp_dir
 
                     fake_db.reset_mock()
+                    fake_db.incident_exists_for_agent.return_value = True
 
                     if isinstance(db_result, Exception):
-                        fake_db.attach_artifact.side_effect = db_result
+                        fake_db.attach_artifact_to_log.side_effect = db_result
                     else:
-                        fake_db.attach_artifact.side_effect = None
-                        fake_db.attach_artifact.return_value = db_result
+                        fake_db.attach_artifact_to_log.side_effect = None
+                        fake_db.attach_artifact_to_log.return_value = db_result
 
                     filename = f"{case_name}.png"
                     file_content = b"fake-evidence-content"
@@ -663,6 +664,7 @@ class TestEvidencePathSafety(unittest.TestCase):
                             "/api/v1/upload_artifact",
                             data={
                                 "agent_id": "test-agent",
+                                "log_id": "42",
                                 "file": (
                                     io.BytesIO(file_content),
                                     filename,
@@ -689,10 +691,113 @@ class TestEvidencePathSafety(unittest.TestCase):
                         list(Path(temp_dir).glob(".upload-*.tmp"))
                     )
 
-                    fake_db.attach_artifact.assert_called_once_with(
+                    fake_db.attach_artifact_to_log.assert_called_once_with(
+                        42,
                         "test-agent",
                         filename,
                         "screenshot",
+                    )
+
+        invalid_log_ids = [
+            ("missing", None),
+            ("local_id", "LOG_123"),
+            ("zero", "0"),
+            ("negative", "-1"),
+            ("letters", "abc"),
+        ]
+
+        for case_name, invalid_id in invalid_log_ids:
+            with self.subTest(invalid_log_id=case_name):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    namespace["EVIDENCE_FOLDER"] = temp_dir
+                    fake_db.reset_mock()
+
+                    filename = f"invalid_{case_name}.png"
+                    data = {
+                        "agent_id": "test-agent",
+                        "file": (
+                            io.BytesIO(b"fake-evidence-content"),
+                            filename,
+                        ),
+                    }
+
+                    if invalid_id is not None:
+                        data["log_id"] = invalid_id
+
+                    with test_app.test_client() as client:
+                        response = client.post(
+                            "/api/v1/upload_artifact",
+                            data=data,
+                            content_type="multipart/form-data",
+                        )
+
+                    self.assertEqual(response.status_code, 400)
+                    self.assertFalse(
+                        (Path(temp_dir) / filename).exists()
+                    )
+                    fake_db.attach_artifact_to_log.assert_not_called()
+
+        validation_cases = [
+            ("incident_not_found", False, 409),
+            (
+                "database_error",
+                RuntimeError("Simulated validation failure"),
+                500,
+            ),
+        ]
+
+        for case_name, validation_result, expected_status in validation_cases:
+            with self.subTest(validation_case=case_name):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    namespace["EVIDENCE_FOLDER"] = temp_dir
+                    fake_db.reset_mock()
+
+                    fake_db.incident_exists_for_agent.side_effect = None
+
+                    if isinstance(validation_result, Exception):
+                        fake_db.incident_exists_for_agent.side_effect = (
+                            validation_result
+                        )
+                    else:
+                        fake_db.incident_exists_for_agent.return_value = (
+                            validation_result
+                        )
+
+                    filename = f"{case_name}.png"
+
+                    with test_app.test_client() as client:
+                        response = client.post(
+                            "/api/v1/upload_artifact",
+                            data={
+                                "agent_id": "test-agent",
+                                "log_id": "42",
+                                "file": (
+                                    io.BytesIO(b"safe-test-evidence"),
+                                    filename,
+                                ),
+                            },
+                            content_type="multipart/form-data",
+                        )
+
+                    self.assertEqual(
+                        response.status_code,
+                        expected_status,
+                    )
+
+                    fake_db.incident_exists_for_agent.assert_called_once_with(
+                        42,
+                        "test-agent",
+                    )
+
+                    fake_db.attach_artifact_to_log.assert_not_called()
+
+                    self.assertFalse(
+                        (Path(temp_dir) / filename).exists()
+                    )
+
+                    self.assertEqual(
+                        list(Path(temp_dir).iterdir()),
+                        [],
                     )
 
 

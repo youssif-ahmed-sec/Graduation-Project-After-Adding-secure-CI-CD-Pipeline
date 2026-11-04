@@ -319,16 +319,6 @@ def log_threat():
     if not verify_agent(request): return jsonify({"error": "Unauthorized"}), 403
     data = request.get_json()
 
-    now = time.time()
-    recent_ss, recent_cam, recent_aud, recent_dmp = [], [], [], []
-    for fname in os.listdir(EVIDENCE_FOLDER):
-        fpath = os.path.join(EVIDENCE_FOLDER, fname)
-        if os.path.isfile(fpath) and (now - os.path.getmtime(fpath)) < 60:
-            fn = fname.lower()
-            if fn.startswith('cam_'): recent_cam.append(fname)
-            elif fn.startswith('mic_'): recent_aud.append(fname)
-            elif fn.startswith('procdump_'): recent_dmp.append(fname)
-            elif fn.startswith('ss_'): recent_ss.append(fname)
 
     db_data = {
         "agent_id": data.get("agent_id"),
@@ -337,25 +327,41 @@ def log_threat():
         "severity_level": data.get("severity_level", "High"),
         "attacker_process": f"PID: {data.get('attacker_pid', 'Unknown')} | {data.get('attacker_name', '')}",
         "process_tree": json.dumps(data.get("process_tree")) if data.get("process_tree") else None,
-        "screenshot_path": ",".join(recent_ss) if recent_ss else None,
-        "camera_path": ",".join(recent_cam) if recent_cam else None,
-        "audio_path": ",".join(recent_aud) if recent_aud else None,
-        "dump_path": ",".join(recent_dmp) if recent_dmp else None,
         "file_hash_before": data.get("hash_before"),
         "file_hash_after": data.get("hash_after"),
         "action_status": data.get("action_status", "Logged")
     }
 
     try:
-        log_id = db.log_threat({k: v for k, v in db_data.items() if v is not None})
-        db_data['log_id'] = log_id
+        log_id = db.log_threat({
+            k: v for k, v in db_data.items()
+            if v is not None
+        })
 
-        socketio.emit('new_threat_alert', db_data, room='admins_room')
+    except Exception:
+        app.logger.exception("Failed to register threat")
+        return jsonify({
+            "error": "Failed to register threat"
+        }), 500
 
-        if recent_ss:
-            threading.Thread(target=analyze_screenshot_task, args=(recent_ss[0], log_id)).start()
-        return jsonify({"status": "success"}), 200
-    except Exception as e: return jsonify({"error": str(e)}), 500
+    db_data["log_id"] = log_id
+
+    try:
+        socketio.emit(
+            "new_threat_alert",
+            db_data,
+            room="admins_room"
+        )
+    except Exception:
+        app.logger.exception(
+            "Admin notification failed for incident %s",
+            log_id
+        )
+
+    return jsonify({
+        "status": "success",
+        "log_id": log_id
+    }), 200
 
 @app.route('/api/v1/upload_artifact', methods=['POST'])
 def upload_artifact():
@@ -363,11 +369,42 @@ def upload_artifact():
     if 'file' not in request.files: return jsonify({"error": "No file"}), 400
 
     file = request.files['file']
-    agent_id = request.form.get('agent_id', 'unknown')
+    agent_id = request.form.get("agent_id", "").strip()
+    raw_log_id = request.form.get("log_id", "").strip()
     filename = secure_filename(file.filename or "")
+
+    if not agent_id:
+        return jsonify({"error": "Missing agent_id"}), 400
+
+    if not raw_log_id.isascii() or not raw_log_id.isdecimal():
+        return jsonify({"error": "Invalid log_id"}), 400
+
+    log_id = int(raw_log_id)
+
+    if log_id <= 0:
+        return jsonify({"error": "Invalid log_id"}), 400
 
     if not filename:
         return jsonify({"error": "Invalid filename"}), 400
+
+    try:
+        incident_exists = db.incident_exists_for_agent(
+            log_id,
+            agent_id,
+        )
+    except Exception:
+        app.logger.exception(
+            "Evidence incident validation failed"
+        )
+        return jsonify({
+            "error": "Unable to validate incident"
+        }), 500
+
+    if not incident_exists:
+        return jsonify({
+            "error": "Incident not found for this agent"
+        }), 409
+
 
     save_path = os.path.join(EVIDENCE_FOLDER, filename)
 
@@ -419,7 +456,12 @@ def upload_artifact():
     elif fn_l.startswith("procdump_"): a_type = "dump"
 
     try:
-        attached = db.attach_artifact(agent_id, filename, a_type)
+        attached = db.attach_artifact_to_log(
+            log_id,
+            agent_id,
+            filename,
+            a_type,
+        )
 
     except Exception:
         app.logger.exception(

@@ -99,7 +99,6 @@ class HoneyFileHandler(FileSystemEventHandler):
         self.is_reverting = True
 
         attacker_pid, process_tree = get_process_context(abs_path)
-        log_id = f"LOG_{int(current_time)}"
 
         hash_before = protected_state.get(self.target_file, {}).get("original_hash", "N/A")
 
@@ -143,39 +142,89 @@ class HoneyFileHandler(FileSystemEventHandler):
         print(f"[*] Executing Playbook Actions from Dashboard...")
         evidence = executor.execute_dynamic_responses(filtered_responses, self.target_file)
 
-        for ev_type, ev_path in evidence.items():
-            if ev_path and os.path.exists(ev_path):
+        alert_payload = {
+            "agent_id": self.agent.agent_id,
+            "action_type": action,
+            "file_path": abs_path,
+            "hash_before": hash_before,
+            "hash_after": hash_after,
+            "action_status": action_status,
+            "severity_level": "Dynamic Policy Triggered",
+            "attacker_pid": attacker_pid,
+            "process_tree": process_tree,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        server_log_id = None
+
+        try:
+            response = requests.post(
+                f"{self.agent.base_url}/log_threat",
+                json=alert_payload,
+                headers=self.agent.get_secure_headers(),
+                verify=True,
+                timeout=60,
+            )
+            response.raise_for_status()
+
+            response_data = response.json()
+
+            if not isinstance(response_data, dict):
+                raise ValueError("Invalid server response format")
+
+            received_id = response_data.get("log_id")
+
+            if type(received_id) is not int or received_id <= 0:
+                raise ValueError("Server returned an invalid log_id")
+
+            server_log_id = received_id
+            print(
+                f"   [+] Incident registered: {server_log_id}"
+            )
+
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            print(
+                f"   [-] Incident registration failed: {exc}"
+            )
+
+        if server_log_id is not None:
+            for ev_type, ev_path in evidence.items():
+                if not ev_path or not os.path.isfile(ev_path):
+                    continue
+
                 try:
-                    with open(ev_path, 'rb') as f:
-                        files = {'file': f}
-                        data = {'agent_id': self.agent.agent_id, 'type': ev_type, 'log_id': log_id}
-                        upload_url = f"{self.agent.base_url}/upload_artifact"
-                        headers = {"Authorization": self.agent.get_secure_headers()["Authorization"]}
+                    with open(ev_path, "rb") as evidence_file:
+                        upload_response = requests.post(
+                            f"{self.agent.base_url}/upload_artifact",
+                            files={"file": evidence_file},
+                            data={
+                                "agent_id": self.agent.agent_id,
+                                "type": ev_type,
+                                "log_id": str(server_log_id),
+                            },
+                            headers=self.agent.get_secure_headers(),
+                            verify=True,
+                            timeout=120,
+                        )
 
-                        requests.post(upload_url, files=files, data=data, headers=headers, verify=True, timeout=120)
-                except Exception as e:
-                    print(f"   [-] Failed to upload artifact {ev_type}: {e}")
+                        upload_response.raise_for_status()
 
-        if "log events" in self.active_responses or "notify admin" in self.active_responses:
-            alert_payload = {
-                "agent_id": self.agent.agent_id,
-                "log_id": log_id,
-                "action_type": action,
-                "file_path": abs_path,
-                "hash_before": hash_before,
-                "hash_after": hash_after,
-                "action_status": action_status,
-                "severity_level": "Dynamic Policy Triggered",
-                "attacker_pid": attacker_pid,
-                "process_tree": process_tree,
-                "evidence_paths": evidence,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            try:
-                requests.post(f"{self.agent.base_url}/log_threat",
-                              json=alert_payload, headers=self.agent.get_secure_headers(), verify=True, timeout=60)
-                print("   [+] Threat Log successfully dispatched to centralized C2.")
-            except: pass
+                    print(
+                        f"   [+] Evidence uploaded for incident "
+                        f"{server_log_id}: {ev_type}"
+                    )
+
+                except (OSError, requests.RequestException) as exc:
+                    print(
+                        f"   [-] Evidence upload failed for "
+                        f"{ev_type}: {exc}"
+                    )
+        else:
+            print(
+                "   [!] Evidence upload skipped: "
+                "no confirmed incident ID."
+            )
+
 
         time.sleep(1)
         last_alert_time[abs_path] = time.time()
