@@ -39,7 +39,8 @@ jobs:
             PyJWT \
             Werkzeug \
             Pillow \
-            WeasyPrint
+            WeasyPrint \
+            requests
 
       - name: Check Python syntax
         run: |
