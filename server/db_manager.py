@@ -4,6 +4,7 @@ import os
 import json
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
+from pathlib import Path
 
 class DBManager:
     def __init__(self):
@@ -236,12 +237,44 @@ class DBManager:
     def update_ai_analysis(self, log_id, ai_text):
         self._execute_query("UPDATE threat_logs SET ai_context = %s WHERE log_id = %s", (ai_text, log_id))
 
+
     def attach_artifact(self, agent_id, file_path, artifact_type):
-        row = self._execute_query("SELECT log_id, screenshot_path, camera_path, audio_path, dump_path FROM threat_logs WHERE agent_id = %s ORDER BY timestamp DESC LIMIT 1", (agent_id,), fetch="one")
-        if row:
-            col = "screenshot_path" if artifact_type == "screenshot" else "camera_path" if artifact_type == "camera" else "audio_path" if artifact_type == "audio" else "dump_path"
-            val = f"{row[col]},{file_path}" if row[col] and file_path not in row[col] else file_path
-            self._execute_query(f"UPDATE threat_logs SET {col} = %s WHERE log_id = %s", (val, row['log_id']))
+        row = self._execute_query(
+            """
+            SELECT log_id, screenshot_path, camera_path,
+                   audio_path, dump_path
+            FROM threat_logs
+            WHERE agent_id = %s
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (agent_id,),
+            fetch="one"
+        )
+        if not row:
+            return False
+        column_map = {
+            "screenshot": "screenshot_path",
+            "camera": "camera_path",
+            "audio": "audio_path",
+            "dump": "dump_path",
+        }
+        if artifact_type not in column_map:
+            raise ValueError("Unsupported artifact type")
+        col = column_map[artifact_type]
+        existing_files = [
+            name.strip()
+            for name in (row[col] or "").split(",")
+            if name.strip()
+        ]
+        if file_path not in existing_files:
+            existing_files.append(file_path)
+
+        self._execute_query(
+            f"UPDATE threat_logs SET {col} = %s WHERE log_id = %s",
+            (",".join(existing_files), row["log_id"])
+        )
+        return True
 
     def save_policy(self, level, actions_list):
         self._execute_query('INSERT INTO response_policies (level, actions_json) VALUES (%s, %s) ON CONFLICT (level) DO UPDATE SET actions_json = EXCLUDED.actions_json', (level, json.dumps(actions_list)))
@@ -274,9 +307,99 @@ class DBManager:
         log = self._execute_query("SELECT * FROM threat_logs WHERE log_id = %s", (log_id,), fetch="one")
         if not log: return None
         agent = self._execute_query("SELECT * FROM agents WHERE agent_id = %s", (log['agent_id'],), fetch="one")
+        base = Path("evidence").resolve()
+        def parse_files(value):
+            if not value:
+                return []
 
-        base = os.path.abspath('evidence')
-        def parse_files(s): return [os.path.join(base, f.strip()) for f in s.split(',')] if s else []
+            safe_paths = []
+
+            for raw_name in value.split(","):
+                name = raw_name.strip()
+
+                if not name:
+                    continue
+
+
+                # Accept filenames only, not paths.
+                if (
+                    name in (".", "..")
+                    or "/" in name
+                    or "\\" in name
+                    or ":" in name
+                    or "\x00" in name
+                ):
+                    continue
+
+                candidate = Path(name)
+
+                if candidate.is_absolute() or candidate.name != name:
+                    continue
+                original_path = base / candidate
+                if original_path.is_symlink():
+                    continue
+                resolved = (base / candidate).resolve()
+
+                if not resolved.is_relative_to(base):
+                    continue
+
+                safe_paths.append(str(resolved))
+
+            return safe_paths
+
+        def prepare_report_images(value):
+            import base64
+            import io
+            from PIL import Image, UnidentifiedImageError
+
+            images = []
+            max_size = 5 * 1024 * 1024  # 5 MB per image
+
+            for file_path in parse_files(value)[:10]:
+                path = Path(file_path)
+
+                try:
+                    # Do not follow evidence symlinks.
+                    if path.is_symlink() or not path.is_file():
+                        continue
+
+                    if path.stat().st_size > max_size:
+                        continue
+
+                    with path.open("rb") as f:
+                        image_bytes = f.read(max_size + 1)
+
+                    if len(image_bytes) > max_size:
+                        continue
+
+                    # Verify actual image content, not just extension.
+                    with Image.open(io.BytesIO(image_bytes)) as img:
+                        if img.format not in ("PNG", "JPEG"):
+                            continue
+
+                        if img.width * img.height > 20_000_000:
+                            continue
+
+                        img.verify()
+                        mime_type = (
+                            "image/png"
+                            if img.format == "PNG"
+                            else "image/jpeg"
+                        )
+
+                    encoded = base64.b64encode(
+                        image_bytes
+                    ).decode("ascii")
+
+                    images.append({
+                        "filename": path.name,
+                        "data_uri": f"data:{mime_type};base64,{encoded}",
+                    })
+
+                except (OSError, ValueError, UnidentifiedImageError):
+                    continue
+
+            return images
 
         dump_snippets = []
         if log.get('dump_path'):
@@ -284,12 +407,20 @@ class DBManager:
             for d_file in dump_files:
                 if os.path.exists(d_file):
                     try:
-                        with open(d_file, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
-                            dump_snippets.append({
-                                "filename": os.path.basename(d_file),
-                                "content": content[:2000] + ("\n... [TRUNCATED FOR PDF REPORT]" if len(content) > 2000 else "")
-                            })
+                        with open(d_file, "r", encoding="utf-8", errors="ignore") as f:
+                            content = f.read(2001)
+
+                        dump_snippets.append({
+                            "filename": os.path.basename(d_file),
+                            "content": (
+                                content[:2000]
+                                + (
+                                    "\n... [TRUNCATED FOR PDF REPORT]"
+                                    if len(content) > 2000
+                                    else ""
+                                )
+                            ),
+                        })
                     except:
                         dump_snippets.append({"filename": os.path.basename(d_file), "content": "[Error reading memory dump]"})
 
@@ -304,8 +435,8 @@ class DBManager:
                 "hash_after": log.get('file_hash_after', 'N/A') or 'N/A'
             },
             "artifacts": {
-                "screenshots": parse_files(log.get('screenshot_path')),
-                "camera": parse_files(log.get('camera_path')),
+                "screenshots": prepare_report_images(log.get('screenshot_path')),
+                "camera": prepare_report_images(log.get('camera_path')),
                 "audio": (log.get('audio_path') or "").split(','),
                 "dump_snippets": dump_snippets
             },

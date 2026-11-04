@@ -149,23 +149,33 @@
         </div>
     {% endif %}
 
-    {% if data.artifacts.screenshots or data.artifacts.camera %}
-        {% for img_path in data.artifacts.screenshots %}
-            <div class="img-container">
-                <img src="file://{{ img_path }}" alt="Desktop Screenshot">
-                <div class="img-caption">Artifact: Desktop Screenshot | Captured at Breach Moment</div>
-            </div>
-        {% endfor %}
 
-        {% for cam_path in data.artifacts.camera %}
-            <div class="img-container">
-                <img src="file://{{ cam_path }}" alt="Webcam Capture">
-                <div class="img-caption">Artifact: Webcam Capture | Attacker Facial Recognition</div>
+{% if data.artifacts.screenshots or data.artifacts.camera %}
+
+    {% for screenshot in data.artifacts.screenshots %}
+        <div class="img-container">
+            <img src="{{ screenshot.data_uri }}" alt="Desktop Screenshot">
+            <div class="img-caption">
+                Artifact: Desktop Screenshot | Captured at Breach Moment
             </div>
-        {% endfor %}
-    {% else %}
-        <p style="color: gray; font-style: italic;">No visual evidence captured for this incident.</p>
-    {% endif %}
+        </div>
+    {% endfor %}
+
+    {% for webcam in data.artifacts.camera %}
+        <div class="img-container">
+            <img src="{{ webcam.data_uri }}" alt="Webcam Capture">
+            <div class="img-caption">
+                Artifact: Webcam Capture
+            </div>
+        </div>
+    {% endfor %}
+
+{% else %}
+    <p style="color: gray; font-style: italic;">
+        No visual evidence captured for this incident.
+    </p>
+{% endif %}
+
 
     <div class="section-title">6. Memory Dump Analysis (String Extraction)</div>
     {% if data.artifacts.dump_snippets %}

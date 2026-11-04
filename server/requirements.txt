@@ -7,4 +7,4 @@ pyotp
 psycopg2-binary
 Pillow
 google-genai
-pdfkit
+weasyprint

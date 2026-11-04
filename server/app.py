@@ -4,7 +4,7 @@ monkey.patch_all()
 import os
 import json
 import time
-from flask import Flask, request, jsonify, send_from_directory, render_template, make_response
+from flask import Flask, request, jsonify, send_from_directory, render_template, make_response, g
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from werkzeug.utils import secure_filename
 from security import SecurityManager
@@ -13,18 +13,19 @@ import urllib3
 import jwt
 import datetime
 from functools import wraps
-import pdfkit
 import sys
 import threading
 from PIL import Image
 import pyotp
-
+import tempfile
+from pdf_renderer import render_pdf
 from google import genai
 from google.genai import types
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 security = SecurityManager()
 db = DBManager()
 
@@ -71,7 +72,8 @@ def admin_required(f):
             payload = jwt.decode(
                 token,
                 JWT_SECRET,
-                algorithms=["HS256"]
+                algorithms=["HS256"],
+                options={"require": ["exp", "iat"]}
             )
 
             if (
@@ -83,7 +85,7 @@ def admin_required(f):
 
         except jwt.InvalidTokenError:
             return jsonify({"error": "Invalid or expired token"}), 401
-
+        g.admin_user = payload["user"]
         return f(*args, **kwargs)
 
     return decorated
@@ -362,9 +364,53 @@ def upload_artifact():
 
     file = request.files['file']
     agent_id = request.form.get('agent_id', 'unknown')
-    filename = secure_filename(file.filename)
+    filename = secure_filename(file.filename or "")
+
+    if not filename:
+        return jsonify({"error": "Invalid filename"}), 400
+
     save_path = os.path.join(EVIDENCE_FOLDER, filename)
-    file.save(save_path)
+
+
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=".upload-",
+            suffix=".tmp",
+            dir=EVIDENCE_FOLDER,
+            delete=False,
+        ) as destination:
+            temp_path = destination.name
+
+            while True:
+                chunk = file.stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                destination.write(chunk)
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.link(temp_path, save_path)
+    except FileExistsError:
+        return jsonify({
+            "error": "Evidence file already exists"
+        }), 409
+    except OSError:
+        app.logger.exception("Evidence upload failed")
+        return jsonify({
+            "error": "Evidence upload failed"
+        }), 500
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                app.logger.exception(
+                    "Failed to remove temporary evidence upload"
+                )
 
     fn_l = filename.lower()
     a_type = "screenshot"
@@ -372,10 +418,38 @@ def upload_artifact():
     elif fn_l.startswith("mic_"): a_type = "audio"
     elif fn_l.startswith("procdump_"): a_type = "dump"
 
-    db.attach_artifact(agent_id, filename, a_type)
-    return jsonify({"message": "Saved", "file": filename}), 200
+    try:
+        attached = db.attach_artifact(agent_id, filename, a_type)
+
+    except Exception:
+        app.logger.exception(
+            "Evidence database attachment failed for %s",
+            filename,
+        )
+        return jsonify({
+            "error": "Evidence saved but database attachment failed",
+            "file": filename,
+        }), 500
+
+    if not attached:
+        app.logger.warning(
+            "Evidence saved without a matching incident: %s",
+            filename,
+        )
+        return jsonify({
+            "error": "Evidence saved but no matching incident was found",
+            "file": filename,
+        }), 409
+
+    return jsonify({
+        "message": "Saved and attached",
+        "file": filename,
+    }), 200
+
+
 
 @app.route('/evidence/<filename>')
+@admin_required
 def serve_evidence(filename):
     return send_from_directory(EVIDENCE_FOLDER, filename)
 
@@ -404,6 +478,7 @@ def admin_login():
         'temp_user': username,
         'role': admin_role,
         'token_type': 'mfa_challenge',
+        'iat': datetime.datetime.now(datetime.timezone.utc),
         'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
     }, JWT_SECRET, algorithm="HS256")
 
@@ -421,7 +496,12 @@ def verify_2fa():
     otp_code = data.get('otp_code')
 
     try:
-        decoded = jwt.decode(temp_token, JWT_SECRET, algorithms=["HS256"])
+        decoded = jwt.decode(
+            temp_token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+            options={"require": ["exp", "iat"]}
+        )
         if decoded.get("token_type") != "mfa_challenge":
             return jsonify({"error": "Invalid MFA challenge token"}), 401
         username = decoded['temp_user']
@@ -440,6 +520,7 @@ def verify_2fa():
             'role': role,
             'token_type': 'access',
             'mfa_verified': True,
+            'iat': datetime.datetime.now(datetime.timezone.utc),
             'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
         }, JWT_SECRET, algorithm="HS256")
 
@@ -654,27 +735,21 @@ def save_ai_settings():
 @app.route('/api/v1/admin/generate_report/<int:log_id>', methods=['GET'])
 @admin_required
 def generate_pdf_report(log_id):
-    token = request.headers.get('X-Admin-Token')
-    try:
-        decoded = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        admin_user = decoded.get('user', 'Admin')
-    except:
-        admin_user = 'System'
+    admin_user = g.admin_user
 
     report_data = db.get_incident_report(log_id, admin_user)
     if not report_data: return jsonify({"error": "Threat log not found"}), 404
 
     html_content = render_template('report.html', data=report_data)
-    options = {'page-size': 'A4', 'margin-top': '0.75in', 'margin-right': '0.75in', 'margin-bottom': '0.75in', 'margin-left': '0.75in', 'encoding': "UTF-8", 'enable-local-file-access': True}
-
     try:
-        pdf_bytes = pdfkit.from_string(html_content, False, options=options)
+        pdf_bytes = render_pdf(html_content)
         response = make_response(pdf_bytes)
         response.headers['Content-Type'] = 'application/pdf'
         response.headers['Content-Disposition'] = f'attachment; filename={report_data["metadata"]["report_id"]}.pdf'
         return response
-    except Exception as e:
-        return jsonify({"error": f"PDF Generation failed: {str(e)}"}), 500
+    except Exception:
+        app.logger.exception("PDF report generation failed")
+        return jsonify({"error": "PDF generation failed"}), 500
 @app.route('/api/v1/admin/emergency_action', methods=['POST'])
 @admin_required
 def emergency_containment():
