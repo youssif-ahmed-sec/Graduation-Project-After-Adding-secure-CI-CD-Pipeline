@@ -3,8 +3,7 @@ import os
 import hashlib
 import time
 import json
-
-
+import secrets
 
 class SecurityManager:
 
@@ -52,3 +51,29 @@ class SecurityManager:
 
 
         return hmac.compare_digest(expected_token, provided_token)
+
+def generate_agent_credential():
+    """
+    Generate a cryptographically secure, independent agent credential.
+    The plaintext credential must be delivered through an approved
+    enrollment workflow and must never be logged.
+    """
+    return secrets.token_urlsafe(32)
+
+
+def hash_agent_credential(credential, pepper):
+    """
+    Compute a server-side HMAC fingerprint of an agent credential.
+    The pepper must be a separate, securely stored server secret.
+    """
+    if not isinstance(credential, str) or not credential:
+        raise ValueError("Invalid credential")
+
+    if not isinstance(pepper, str) or len(pepper) < 32:
+        raise ValueError("Invalid credential hashing key")
+
+    return hmac.new(
+        pepper.encode("utf-8"),
+        credential.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()

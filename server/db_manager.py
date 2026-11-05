@@ -210,6 +210,43 @@ class DBManager:
             fetch="one"
         )
 
+    def create_pending_agent_credential(self, agent_id, credential_hash):
+        """
+        Insert a pending credential for an existing agent.
+
+        Must be called only by a trusted administrative workflow.
+        Never use this method in public self-registration endpoints.
+        """
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("Invalid agent ID")
+
+        if not isinstance(credential_hash, str) or len(credential_hash) != 64:
+            raise ValueError("Invalid credential hash")
+
+        try:
+            int(credential_hash, 16)
+        except ValueError:
+            raise ValueError("Invalid credential hash") from None
+
+        query = """
+            INSERT INTO agent_credentials (
+                agent_id,
+                credential_hash,
+                is_active
+            )
+            VALUES (%s, %s, FALSE)
+            ON CONFLICT (agent_id) DO NOTHING
+            RETURNING agent_id
+        """
+
+        row = self._execute_query(
+            query,
+            (agent_id, credential_hash),
+            fetch="one"
+        )
+
+        return row is not None
+
     def register_agent(self, agent_id, hostname, ip, mac, os_info, user_id=None):
         query = '''INSERT INTO agents (agent_id, user_id, hostname, ip_address, mac_address, os_details, status, last_heartbeat)
                    VALUES (%s, %s, %s, %s, %s, %s, 'Online', CURRENT_TIMESTAMP)
