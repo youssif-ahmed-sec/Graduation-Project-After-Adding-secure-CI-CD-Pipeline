@@ -11,7 +11,6 @@ else:
 
 os.chdir(app_dir)
 
-from security import SecurityManager
 from modules.watcher import start_watcher
 from modules.response_engine import ResponseEngine
 
@@ -40,7 +39,6 @@ def add_to_startup():
 class FileTrackClient:
     def __init__(self):
         self.config = self.load_config()
-        self.security = SecurityManager()
 
         self.base_url = f"https://{self.config['server_ip']}:{self.config['server_port']}/api/v1"
         self.ws_url = f"https://{self.config['server_ip']}:{self.config['server_port']}"
@@ -144,9 +142,6 @@ class FileTrackClient:
             "mac_address": mac,
             "ip_address": local_ip
         }
-
-    def get_secure_headers(self):
-        return {"Authorization": f"Bearer {self.security.generate_current_token()}", "Content-Type": "application/json"}
 
     def get_enrolled_agent_headers(self):
         """

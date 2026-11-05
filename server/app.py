@@ -8,7 +8,6 @@ from flask import Flask, request, jsonify, send_from_directory, render_template,
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from werkzeug.utils import secure_filename
 from security import (
-    SecurityManager,
     generate_agent_credential,
     hash_agent_credential,
     authenticate_registered_agent,
@@ -33,10 +32,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
-security = SecurityManager()
 db = DBManager()
 
-socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
+socketio = SocketIO(
+    app,
+    async_mode="gevent",
+    cors_allowed_origins=None,
+)
 connected_agents = {}
 authenticated_admin_sids = set()
 agent_session_credential_hashes = {}
@@ -90,12 +92,6 @@ def add_security_headers(response):
     response.headers["Cache-Control"] = "no-store, private"
 
     return response
-
-
-def verify_agent(req):
-    h = req.headers.get('Authorization')
-    if not h or not h.startswith("Bearer "): return False
-    return security.verify_token(h.split(" ")[1])
 
 def verify_registered_agent_request(req):
     """

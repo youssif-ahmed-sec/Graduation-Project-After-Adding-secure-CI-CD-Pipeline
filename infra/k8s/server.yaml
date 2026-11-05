@@ -26,6 +26,7 @@ spec:
           ports:
             - containerPort: 5000
               name: http
+
           env:
             - name: DB_HOST
               value: "postgres"
@@ -41,11 +42,6 @@ spec:
                 secretKeyRef:
                   name: filetrack-secrets
                   key: db-password
-            - name: AGENT_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: filetrack-secrets
-                  key: agent-secret-key
             - name: AGENT_CREDENTIAL_PEPPER
               valueFrom:
                 secretKeyRef:

@@ -24,7 +24,6 @@ jobs:
           set -euo pipefail
 
           echo "DB_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
-          echo "AGENT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
           echo "AGENT_CREDENTIAL_PEPPER=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
