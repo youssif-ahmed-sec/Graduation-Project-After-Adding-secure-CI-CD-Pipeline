@@ -270,5 +270,5 @@ jobs:
         with:
           base: ""
           head: ${{ github.sha }}
-          version: v3.99.2
+          version: "3.99.2"
           extra_args: --results=verified,unknown
