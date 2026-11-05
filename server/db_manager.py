@@ -13,7 +13,7 @@ class DBManager:
             "user": os.getenv("DB_USER", "postgres"),
             "password": os.environ["DB_PASS"],
             "host": os.getenv("DB_HOST", "db"),
-            "port": "5432"
+            "port": os.getenv("DB_PORT", "5432")
         }
         self.setup_environment()
         self.create_tables()
@@ -320,6 +320,40 @@ class DBManager:
             query,
             (agent_id,),
             fetch="one"
+        )
+
+        return row is not None
+
+    def create_pending_agent(self, agent_id):
+        """
+        Create an approved agent record before credential provisioning.
+
+        This method must only be called from an authorized
+        administrative endpoint.
+        """
+        if (
+            not isinstance(agent_id, str)
+            or not agent_id
+            or agent_id != agent_id.strip()
+            or len(agent_id) > 128
+        ):
+            raise ValueError("Invalid agent ID")
+
+        query = """
+            INSERT INTO agents (
+                agent_id,
+                status,
+                last_heartbeat
+            )
+            VALUES (%s, 'Pending', NULL)
+            ON CONFLICT (agent_id) DO NOTHING
+            RETURNING agent_id
+        """
+
+        row = self._execute_query(
+            query,
+            (agent_id,),
+            fetch="one",
         )
 
         return row is not None

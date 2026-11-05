@@ -9,6 +9,8 @@ from flask_socketio import SocketIO, emit, join_room, disconnect
 from werkzeug.utils import secure_filename
 from security import (
     SecurityManager,
+    generate_agent_credential,
+    hash_agent_credential,
     authenticate_registered_agent,
     load_agent_credential_pepper,
 )
@@ -25,6 +27,7 @@ import tempfile
 from pdf_renderer import render_pdf
 from google import genai
 from google.genai import types
+import hmac
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -36,6 +39,7 @@ db = DBManager()
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 connected_agents = {}
 authenticated_admin_sids = set()
+agent_session_credential_hashes = {}
 
 JWT_SECRET = os.environ.get("JWT_SECRET_KEY")
 
@@ -198,11 +202,15 @@ def get_username_from_token(req):
 
 @socketio.on('connect')
 def handle_connect(auth):
-    if not auth or 'token' not in auth:
-        print("[-] WSS Connection Rejected: Missing Auth Data")
+    if not isinstance(auth, dict):
         return False
 
-    if auth.get('is_admin'):
+    if auth.get("is_admin") is True:
+        token = auth.get("token")
+
+        if not isinstance(token, str) or not token:
+            return False
+
         try:
             payload = jwt.decode(
                 auth['token'],
@@ -224,30 +232,114 @@ def handle_connect(auth):
         except jwt.InvalidTokenError:
             return False
 
-    if 'agent_id' not in auth or not security.verify_token(auth['token']):
+    agent_id = auth.get("agent_id")
+    credential = auth.get("credential")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+        or len(agent_id) > 128
+        or not isinstance(credential, str)
+        or not credential
+        or credential != credential.strip()
+    ):
         return False
 
-    agent_id = auth['agent_id']
+    try:
+        pepper = load_agent_credential_pepper()
+
+        authenticated = authenticate_registered_agent(
+            agent_id,
+            credential,
+            db,
+            pepper,
+        )
+
+        if not authenticated:
+            return False
+        session_credential_hash = hash_agent_credential(
+            credential,
+            pepper,
+        )
+
+        db.update_heartbeat(agent_id)
+
+    except Exception:
+        app.logger.warning(
+            "Socket.IO agent authentication unavailable"
+        )
+        return False
+
     join_room(agent_id)
     connected_agents[request.sid] = agent_id
-    db.update_heartbeat(agent_id)
 
-    socketio.emit('agent_status_update', {'agent_id': agent_id, 'status': 'Online'}, room='admins_room')
-    print(f"[+] Agent {agent_id} connected via Secure WebSocket (WSS)")
+    agent_session_credential_hashes[
+        request.sid
+    ] = session_credential_hash
+
+    socketio.emit(
+        "agent_status_update",
+        {"agent_id": agent_id, "status": "Online"},
+        room="admins_room",
+    )
+
+    print(f"[+] Agent {agent_id} connected via Socket.IO")
     return True
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    agent_session_credential_hashes.pop(request.sid, None)
     agent_id = connected_agents.pop(request.sid, None)
     authenticated_admin_sids.discard(request.sid)
     if agent_id:
         socketio.emit('agent_status_update', {'agent_id': agent_id, 'status': 'Offline'}, room='admins_room')
         print(f"[*] Agent {agent_id} disconnected from WSS")
 
+def get_authorized_socket_agent(sid):
+    """
+    Return the authenticated agent_id only while the
+    credential bound to this socket remains active.
+
+    Fail closed if the database is unavailable.
+    """
+    agent_id = connected_agents.get(sid)
+    session_hash = agent_session_credential_hashes.get(sid)
+
+    if not isinstance(agent_id, str) or not isinstance(session_hash, str):
+        return None
+
+    try:
+        credential_record = db.get_agent_credential(agent_id)
+
+        if not isinstance(credential_record, dict):
+            return None
+
+        if credential_record.get("is_active") is not True:
+            return None
+
+        if credential_record.get("revoked_at") is not None:
+            return None
+
+        stored_hash = credential_record.get("credential_hash")
+
+        if not isinstance(stored_hash, str):
+            return None
+
+        if not hmac.compare_digest(session_hash, stored_hash):
+            return None
+
+        return agent_id
+
+    except Exception:
+        app.logger.warning(
+            "Socket.IO session credential verification unavailable"
+        )
+        return None
+
 @socketio.on('task_response')
 def handle_task_response(data):
-    agent_id = connected_agents.get(request.sid)
-
+    agent_id = get_authorized_socket_agent(request.sid)
     if not agent_id:
         disconnect()
         return
@@ -282,8 +374,7 @@ def handle_admin_cmd(data):
 
 @socketio.on('cmd_result')
 def handle_cmd_result(data):
-    agent_id = connected_agents.get(request.sid)
-
+    agent_id = get_authorized_socket_agent(request.sid)
     if not agent_id:
         disconnect()
         return
@@ -378,21 +469,45 @@ def analyze_screenshot_task(image_filename, log_id):
     except Exception as e:
         print(f"[-] AI Analysis Error: {str(e)}", file=sys.stderr)
 
-@app.route('/api/v1/register', methods=['POST'])
+@app.route("/api/v1/register", methods=["POST"])
 def register_agent():
-    if not verify_agent(request): return jsonify({"error": "Unauthorized"}), 403
-    data = request.get_json()
-    metadata = data.get('metadata', {})
+    authenticated_agent_id = verify_registered_agent_request(request)
+
+    if authenticated_agent_id is None:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    if data.get("agent_id") != authenticated_agent_id:
+        return jsonify({"error": "Agent identity mismatch"}), 403
+
+    metadata = data.get("metadata", {})
+
+    if not isinstance(metadata, dict):
+        return jsonify({"error": "Invalid metadata"}), 400
+
     try:
+        if not db.agent_exists(authenticated_agent_id):
+            return jsonify({"error": "Agent not enrolled"}), 403
+
         db.register_agent(
-            data.get('agent_id', 'UNKNOWN'),
-            metadata.get('hostname', 'Unknown'),
+            authenticated_agent_id,
+            metadata.get("hostname", "Unknown"),
             request.remote_addr,
-            metadata.get('mac_address', 'Unknown'),
-            metadata.get('os_version', 'Unknown')
+            metadata.get("mac_address", "Unknown"),
+            metadata.get("os_version", "Unknown"),
         )
+
         return jsonify({"status": "success"}), 200
-    except Exception as e: return jsonify({"error": str(e)}), 500
+
+    except Exception:
+        app.logger.error("Agent registration failed")
+        return jsonify({
+            "error": "Agent registration unavailable"
+        }), 503
 
 @app.route('/api/v1/heartbeat', methods=['POST'])
 def receive_heartbeat():
@@ -446,12 +561,22 @@ def report_files():
 
 @app.route('/api/v1/log_threat', methods=['POST'])
 def log_threat():
-    if not verify_agent(request): return jsonify({"error": "Unauthorized"}), 403
-    data = request.get_json()
 
+    authenticated_agent_id = verify_registered_agent_request(request)
+
+    if authenticated_agent_id is None:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    if data.get("agent_id") != authenticated_agent_id:
+        return jsonify({"error": "Agent identity mismatch"}), 403
 
     db_data = {
-        "agent_id": data.get("agent_id"),
+        "agent_id": authenticated_agent_id,
         "action_type": data.get("action_type"),
         "file_path": data.get("file_path"),
         "severity_level": data.get("severity_level", "High"),
@@ -495,11 +620,18 @@ def log_threat():
 
 @app.route('/api/v1/upload_artifact', methods=['POST'])
 def upload_artifact():
-    if not verify_agent(request): return jsonify({"error": "Unauthorized"}), 403
-    if 'file' not in request.files: return jsonify({"error": "No file"}), 400
+    authenticated_agent_id = verify_registered_agent_request(request)
+
+    if authenticated_agent_id is None:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file"}), 400
 
     file = request.files['file']
     agent_id = request.form.get("agent_id", "").strip()
+    if agent_id != authenticated_agent_id:
+        return jsonify({"error": "Agent identity mismatch"}), 403
     raw_log_id = request.form.get("log_id", "").strip()
     filename = secure_filename(file.filename or "")
 
@@ -520,7 +652,7 @@ def upload_artifact():
     try:
         incident_exists = db.incident_exists_for_agent(
             log_id,
-            agent_id,
+            authenticated_agent_id,
         )
     except Exception:
         app.logger.exception(
@@ -723,6 +855,196 @@ def get_agents():
             agent['status'] = 'Online'
 
     return jsonify({"status": "success", "data": db_agents}), 200
+
+@app.route("/api/v1/admin/agents/approve", methods=["POST"])
+@superadmin_required
+def approve_agent_endpoint():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    agent_id = data.get("agent_id")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+        or len(agent_id) > 128
+    ):
+        return jsonify({"error": "Invalid agent_id"}), 400
+
+    try:
+        created = db.create_pending_agent(agent_id)
+    except Exception:
+        app.logger.error("Agent approval failed")
+        return jsonify({
+            "error": "Agent approval unavailable"
+        }), 503
+
+    if not created:
+        return jsonify({
+            "error": "Agent already exists"
+        }), 409
+
+    return jsonify({
+        "status": "success",
+        "agent_id": agent_id,
+        "agent_status": "Pending",
+    }), 201
+
+@app.route("/api/v1/admin/agents/credentials/provision", methods=["POST"])
+@superadmin_required
+def provision_agent_credential():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    agent_id = data.get("agent_id")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+        or len(agent_id) > 128
+    ):
+        return jsonify({"error": "Invalid agent_id"}), 400
+
+    try:
+        if not db.agent_exists(agent_id):
+            return jsonify({"error": "Agent not found"}), 404
+
+        credential = generate_agent_credential()
+        pepper = load_agent_credential_pepper()
+
+        credential_hash = hash_agent_credential(
+            credential,
+            pepper,
+        )
+
+        created = db.create_pending_agent_credential(
+            agent_id,
+            credential_hash,
+        )
+
+        if not created:
+            return jsonify({
+                "error": "Agent credential already exists"
+            }), 409
+
+    except Exception:
+        app.logger.error(
+            "Agent credential provisioning failed"
+        )
+        return jsonify({
+            "error": "Credential provisioning unavailable"
+        }), 503
+
+    response = jsonify({
+        "status": "success",
+        "agent_id": agent_id,
+        "credential": credential,
+        "credential_status": "pending",
+    })
+
+    response.headers["Cache-Control"] = "no-store, private"
+
+    return response, 201
+
+@app.route(
+    "/api/v1/admin/agents/credentials/activate",
+    methods=["POST"]
+)
+@superadmin_required
+def activate_agent_credential_endpoint():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    agent_id = data.get("agent_id")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+        or len(agent_id) > 128
+    ):
+        return jsonify({"error": "Invalid agent_id"}), 400
+
+    try:
+        activated = db.activate_agent_credential(agent_id)
+    except Exception:
+        app.logger.error("Agent credential activation failed")
+        return jsonify({
+            "error": "Credential activation unavailable"
+        }), 503
+
+    if not activated:
+        return jsonify({
+            "error": "Credential cannot be activated"
+        }), 409
+
+    return jsonify({
+        "status": "success",
+        "agent_id": agent_id,
+        "credential_status": "active"
+    }), 200
+
+@app.route("/api/v1/admin/agents/credentials/revoke", methods=["POST"])
+@superadmin_required
+def revoke_agent_credential_endpoint():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    agent_id = data.get("agent_id")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+        or len(agent_id) > 128
+    ):
+        return jsonify({"error": "Invalid agent_id"}), 400
+
+    try:
+        revoked = db.revoke_agent_credential(agent_id)
+    except Exception:
+        app.logger.error("Agent credential revocation failed")
+        return jsonify({
+            "error": "Credential revocation unavailable"
+        }), 503
+
+    if not revoked:
+        return jsonify({
+            "error": "Credential cannot be revoked"
+        }), 409
+
+    sessions_to_disconnect = [
+        sid
+        for sid, connected_agent_id in list(connected_agents.items())
+        if connected_agent_id == agent_id
+    ]
+
+    for sid in sessions_to_disconnect:
+        try:
+            socketio.server.disconnect(
+                sid,
+                namespace="/",
+            )
+        except Exception:
+            app.logger.error(
+                "Failed to disconnect a revoked agent session"
+            )
+
+    return jsonify({
+        "status": "success",
+        "agent_id": agent_id,
+        "credential_status": "revoked"
+    }), 200
 
 @app.route('/api/v1/admin/threats', methods=['GET'])
 @admin_required

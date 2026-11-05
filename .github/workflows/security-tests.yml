@@ -13,6 +13,28 @@ jobs:
     name: Python Security Regression Tests
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      DB_NAME: filetrack_enrollment_test
+      DB_USER: postgres
+      DB_PASS: ci-only-postgres-test-password
+      DB_HOST: 127.0.0.1
+      DB_PORT: "55432"
+      FILETRACK_RUN_PG_INTEGRATION: "1"
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: filetrack_enrollment_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-postgres-test-password
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d filetrack_enrollment_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout source
@@ -36,11 +58,14 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check \
             Flask \
+            Flask-SocketIO \
+            gevent \
             PyJWT \
             Werkzeug \
             Pillow \
             WeasyPrint \
-            requests
+            requests \
+            psycopg2-binary
 
       - name: Check Python syntax
         run: |
@@ -52,6 +77,31 @@ jobs:
             server/app.py \
             server/pdf_renderer.py \
             server/db_manager.py
+      - name: Verify PostgreSQL test database
+        run: |
+          python - <<'PY'
+          import os
+          import psycopg2
+
+          connection = psycopg2.connect(
+              dbname=os.environ["DB_NAME"],
+              user=os.environ["DB_USER"],
+              password=os.environ["DB_PASS"],
+              host=os.environ["DB_HOST"],
+              port=os.environ["DB_PORT"],
+              connect_timeout=5,
+          )
+
+          try:
+              with connection.cursor() as cursor:
+                  cursor.execute("SELECT current_database()")
+                  database_name = cursor.fetchone()[0]
+
+              assert database_name == "filetrack_enrollment_test"
+              print("PostgreSQL integration database is ready")
+          finally:
+              connection.close()
+          PY
 
       - name: Run security regression tests
         run: |
@@ -59,6 +109,31 @@ jobs:
             -s tests \
             -p "test_*.py" \
             -v
+
+      - name: Verify mandatory PostgreSQL integration test
+        run: |
+          python - <<'PY'
+          import os
+          import unittest
+
+          assert os.environ.get("FILETRACK_RUN_PG_INTEGRATION") == "1"
+
+          suite = unittest.defaultTestLoader.discover(
+              start_dir="tests",
+              pattern="test_postgres_agent_enrollment.py",
+          )
+
+          assert suite.countTestCases() == 1, (
+              "PostgreSQL integration test was not discovered"
+          )
+
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+
+          if not result.wasSuccessful() or result.skipped:
+              raise SystemExit(
+                  "Mandatory PostgreSQL integration test failed or skipped"
+              )
+          PY
 
   secret-scanning:
     name: Gitleaks Secret Scanning

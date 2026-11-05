@@ -2,6 +2,7 @@ import requests, json, socket, platform, uuid, time, os, threading, sys, winreg
 import subprocess, hashlib
 import psutil
 import socketio
+import os
 
 if getattr(sys, 'frozen', False):
     app_dir = os.path.dirname(sys.executable)
@@ -147,13 +148,45 @@ class FileTrackClient:
     def get_secure_headers(self):
         return {"Authorization": f"Bearer {self.security.generate_current_token()}", "Content-Type": "application/json"}
 
+    def get_enrolled_agent_headers(self):
+        """
+        Return authentication headers for an enrolled agent.
+
+        Never fall back to the legacy shared token.
+        """
+        credential = os.environ.get("FILETRACK_AGENT_CREDENTIAL")
+
+        if (
+            not isinstance(credential, str)
+            or not credential
+            or credential != credential.strip()
+        ):
+            raise RuntimeError(
+                "Agent credential is missing or invalid"
+            )
+
+        return {
+            "Authorization": f"Bearer {credential}",
+            "X-Agent-ID": self.agent_id,
+        }
+
     def register(self):
         try:
-            res = requests.post(f"{self.base_url}/register",
-                                json={"agent_id": self.agent_id, "metadata": self.collect_metadata()},
-                                headers=self.get_secure_headers(), verify=True, timeout=10)
-            return res.status_code == 200
-        except: return False
+            response = requests.post(
+                f"{self.base_url}/register",
+                json={
+                    "agent_id": self.agent_id,
+                    "metadata": self.collect_metadata(),
+                },
+                headers=self.get_enrolled_agent_headers(),
+                verify=True,
+                timeout=10,
+            )
+
+            return response.status_code == 200
+
+        except (requests.RequestException, RuntimeError):
+            return False
 
     def setup_handlers(self):
         @self.sio.event
@@ -237,19 +270,36 @@ class FileTrackClient:
             })
 
     def connect_to_server(self):
-        print("[*] Initiating WebSocket Handshake...")
-        token = self.security.generate_current_token()
-        try:
-            self.sio.connect(
-                self.ws_url,
-                auth={'token': token, 'agent_id': self.agent_id},
-                transports=['websocket']
-            )
-            self.sio.wait()
-        except Exception as e:
-            print(f"[-] WebSocket Connection failed: {e}")
+        while True:
+            try:
+                headers = self.get_enrolled_agent_headers()
+
+                credential = headers["Authorization"].removeprefix(
+                    "Bearer "
+                )
+
+                print("[*] Initiating authenticated WebSocket handshake...")
+
+                self.sio.connect(
+                    self.ws_url,
+                    auth={
+                        "agent_id": self.agent_id,
+                        "credential": credential,
+                    },
+                    transports=["websocket"],
+                )
+
+                self.sio.wait()
+
+            except Exception:
+                # Do not print connection exceptions that might
+                # contain authentication details.
+                print(
+                    "[-] WebSocket connection unavailable. "
+                    "Retrying in 5 seconds..."
+                )
+
             time.sleep(5)
-            self.connect_to_server()
 
     def get_unique_device_id(self):
         try:
