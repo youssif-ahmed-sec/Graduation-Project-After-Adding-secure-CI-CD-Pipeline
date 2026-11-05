@@ -123,6 +123,34 @@ class SecurityHeadersTests(unittest.TestCase):
             response.headers.get("Content-Security-Policy", ""),
         )
 
+    def test_cross_origin_resource_policy_is_same_origin(self):
+        with self.app.test_client() as client:
+            response = client.get("/healthz")
+
+        self.assertEqual(
+            response.headers.get("Cross-Origin-Resource-Policy"),
+            "same-origin",
+        )
+
+    def test_health_endpoint_is_not_cacheable(self):
+        with self.app.test_client() as client:
+            response = client.get("/healthz")
+
+        self.assertEqual(
+            response.headers.get("Cache-Control"),
+            "no-store, private",
+        )
+
+    def test_not_found_responses_are_not_cacheable(self):
+        with self.app.test_client() as client:
+            response = client.get("/not-found")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.headers.get("Cache-Control"),
+            "no-store, private",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
