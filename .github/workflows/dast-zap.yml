@@ -2,6 +2,7 @@
 name: FileTrack DAST - OWASP ZAP
 
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -51,6 +52,54 @@ jobs:
           docker compose ps
           exit 1
 
+      - name: Test unauthenticated API access
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_status() {
+            local name="$1"
+            local expected="$2"
+            local url="$3"
+            local payload="$4"
+
+            actual=$(curl --silent --show-error \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              --max-time 10 \
+              --header "Content-Type: application/json" \
+              --request POST \
+              --data "$payload" \
+              "$url")
+
+            if [[ "$actual" != "$expected" ]]; then
+              echo "FAIL: $name returned HTTP $actual, expected $expected"
+              exit 1
+            fi
+
+            echo "PASS: $name rejected unauthenticated access"
+          }
+
+          BASE_URL="http://127.0.0.1:5000/api/v1"
+
+          check_status \
+            "Agent registration" \
+            "403" \
+            "$BASE_URL/register" \
+            '{"agent_id":"dast-unauthorized-agent","metadata":{}}'
+
+          check_status \
+            "Agent heartbeat" \
+            "403" \
+            "$BASE_URL/heartbeat" \
+            '{"agent_id":"dast-unauthorized-agent"}'
+
+          check_status \
+            "SuperAdmin approval" \
+            "401" \
+            "$BASE_URL/admin/agents/approve" \
+            '{"agent_id":"dast-unauthorized-agent"}'
+
       - name: Prepare report directory
         run: |
           mkdir -p zap-reports
@@ -63,7 +112,7 @@ jobs:
             -v "${PWD}/zap-reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
-            -t http://127.0.0.1:5000/healthz \
+            -t http://127.0.0.1:5000/ \
             -m 1 \
             -I \
             -r zap-report.html \
