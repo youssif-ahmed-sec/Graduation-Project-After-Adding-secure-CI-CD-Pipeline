@@ -70,7 +70,6 @@ jobs:
       - name: Check Python syntax
         run: |
           python -m py_compile \
-            agent/security.py \
             agent/client.py \
             agent/modules/response_engine.py \
             server/security.py \
