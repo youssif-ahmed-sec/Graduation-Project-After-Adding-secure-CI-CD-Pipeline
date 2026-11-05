@@ -73,6 +73,75 @@ class TestAgentCredentialsSchema(unittest.TestCase):
             r"revoked_at\s+TIMESTAMPTZ",
         )
 
+class TestAgentCredentialLookup(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import MagicMock
+
+        source = DB_MANAGER.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        manager = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "DBManager"
+        )
+
+        method = next(
+            node for node in manager.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "get_agent_credential"
+        )
+
+        # Test only the method without importing DBManager
+        # or opening a PostgreSQL connection.
+        module = ast.Module(body=[method], type_ignores=[])
+        ast.fix_missing_locations(module)
+
+        namespace = {}
+        exec(compile(module, "<credential-lookup-test>", "exec"), namespace)
+
+        cls.lookup = staticmethod(namespace["get_agent_credential"])
+        cls.MagicMock = MagicMock
+
+    def test_returns_existing_credential(self):
+        db = self.MagicMock()
+        expected = {
+            "agent_id": "agent-a",
+            "credential_hash": "test-hash",
+            "is_active": True,
+            "revoked_at": None,
+        }
+        db._execute_query.return_value = expected
+
+        result = self.lookup(db, "agent-a")
+
+        self.assertEqual(result, expected)
+        db._execute_query.assert_called_once()
+
+        args, kwargs = db._execute_query.call_args
+
+        self.assertIn("FROM agent_credentials", args[0])
+        self.assertEqual(args[1], ("agent-a",))
+        self.assertEqual(kwargs["fetch"], "one")
+
+    def test_rejects_invalid_agent_ids(self):
+        for agent_id in (None, "", "   ", 123, [], {}):
+            with self.subTest(agent_id=agent_id):
+                db = self.MagicMock()
+
+                self.assertIsNone(self.lookup(db, agent_id))
+                db._execute_query.assert_not_called()
+
+    def test_returns_none_for_missing_credential(self):
+        db = self.MagicMock()
+        db._execute_query.return_value = None
+
+        result = self.lookup(db, "unknown-agent")
+
+        self.assertIsNone(result)
+        db._execute_query.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

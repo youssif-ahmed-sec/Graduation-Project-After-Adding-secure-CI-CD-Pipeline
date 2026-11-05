@@ -189,6 +189,27 @@ class DBManager:
         row = self._execute_query('SELECT value FROM system_settings WHERE key = %s', (key,), fetch="one")
         return row['value'] if row else None
 
+    def get_agent_credential(self, agent_id):
+        """
+        Fetch credential metadata for a specific registered agent.
+        This method must not return a plaintext credential.
+        """
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            return None
+
+        query = """
+            SELECT agent_id, credential_hash, is_active, revoked_at
+            FROM agent_credentials
+            WHERE agent_id = %s
+            LIMIT 1
+        """
+
+        return self._execute_query(
+            query,
+            (agent_id,),
+            fetch="one"
+        )
+
     def register_agent(self, agent_id, hostname, ip, mac, os_info, user_id=None):
         query = '''INSERT INTO agents (agent_id, user_id, hostname, ip_address, mac_address, os_details, status, last_heartbeat)
                    VALUES (%s, %s, %s, %s, %s, %s, 'Online', CURRENT_TIMESTAMP)
