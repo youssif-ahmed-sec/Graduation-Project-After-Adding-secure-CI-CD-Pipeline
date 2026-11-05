@@ -62,6 +62,29 @@ GLOBAL_CONFIG = get_initial_config()
 def healthz():
     return jsonify({"status": "ok"}), 200
 
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; "
+        "base-uri 'none'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "form-action 'none'"
+    )
+
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+
+    if request.path.startswith("/api/") or request.path.startswith("/evidence/"):
+        response.headers["Cache-Control"] = "no-store, private"
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    return response
+
+
 def verify_agent(req):
     h = req.headers.get('Authorization')
     if not h or not h.startswith("Bearer "): return False
