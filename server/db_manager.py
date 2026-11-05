@@ -247,6 +247,60 @@ class DBManager:
 
         return row is not None
 
+    def revoke_agent_credential(self, agent_id):
+        """
+        Permanently revoke an existing agent credential.
+
+        Call only from an authenticated and authorized
+        administrative workflow.
+        """
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("Invalid agent ID")
+
+        query = """
+            UPDATE agent_credentials
+            SET is_active = FALSE,
+                revoked_at = CURRENT_TIMESTAMP
+            WHERE agent_id = %s
+            AND revoked_at IS NULL
+            RETURNING agent_id
+        """
+
+        row = self._execute_query(
+            query,
+            (agent_id,),
+            fetch="one"
+        )
+
+        return row is not None
+
+    def activate_agent_credential(self, agent_id):
+        """
+        Activate a pending, non-revoked agent credential.
+
+        This method must only be called after explicit administrative
+        approval through an authenticated and authorized workflow.
+        """
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("Invalid agent ID")
+
+        query = """
+            UPDATE agent_credentials
+            SET is_active = TRUE
+            WHERE agent_id = %s
+            AND is_active = FALSE
+            AND revoked_at IS NULL
+            RETURNING agent_id
+        """
+
+        row = self._execute_query(
+            query,
+            (agent_id,),
+            fetch="one"
+        )
+
+        return row is not None
+
     def register_agent(self, agent_id, hostname, ip, mac, os_info, user_id=None):
         query = '''INSERT INTO agents (agent_id, user_id, hostname, ip_address, mac_address, os_details, status, last_heartbeat)
                    VALUES (%s, %s, %s, %s, %s, %s, 'Online', CURRENT_TIMESTAMP)
