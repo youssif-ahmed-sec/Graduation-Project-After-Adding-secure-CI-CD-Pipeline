@@ -1,0 +1,85 @@
+
+name: FileTrack DAST - OWASP ZAP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zap-baseline:
+    name: OWASP ZAP Baseline - Isolated Backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Generate temporary test secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "DB_PASSWORD=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AGENT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "JWT_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "AGENT_CREDENTIAL_PEPPER=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Start isolated PostgreSQL and backend
+        run: docker compose up -d --build
+
+      - name: Wait for backend HTTP response
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for i in $(seq 1 60); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              http://127.0.0.1:5000/ || true)
+
+            if [[ "$STATUS" == "200" ||
+                  "$STATUS" == "302" ||
+                  "$STATUS" == "404" ]]; then
+              echo "Backend HTTP listener is responding: $STATUS"
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Backend did not become reachable"
+          docker compose ps
+          exit 1
+
+      - name: Prepare report directory
+        run: |
+          mkdir -p zap-reports
+          sudo chown 1000:1000 zap-reports
+
+      - name: Run OWASP ZAP Baseline
+        run: |
+          docker run --rm \
+            --network host \
+            -v "${PWD}/zap-reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://127.0.0.1:5000/ \
+            -m 1 \
+            -I \
+            -r zap-report.html \
+            -J zap-report.json
+
+      - name: Upload DAST reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: filetrack-zap-baseline-report
+          path: zap-reports/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop temporary environment
+        if: always()
+        run: docker compose down -v --remove-orphans
