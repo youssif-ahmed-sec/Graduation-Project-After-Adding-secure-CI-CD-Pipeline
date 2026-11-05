@@ -103,21 +103,18 @@ jobs:
       - name: Prepare report directory
         run: |
           mkdir -p zap-reports
-          sudo chown 1000:1000 zap-reports
+          cp .github/zap-api-plan.yaml zap-reports/zap-api-plan.yaml
+          sudo chown -R 1000:1000 zap-reports
 
-      - name: Run OWASP ZAP Baseline
+
+      - name: Run OWASP ZAP API Passive Scan
         run: |
           docker run --rm \
             --network host \
             -v "${PWD}/zap-reports:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py \
-            -t http://127.0.0.1:5000/ \
-            -m 1 \
-            -I \
-            -r zap-report.html \
-            -J zap-report.json
-
+            zap.sh -cmd \
+            -autorun /zap/wrk/zap-api-plan.yaml
       - name: Upload DAST reports
         if: always()
         uses: actions/upload-artifact@v4
