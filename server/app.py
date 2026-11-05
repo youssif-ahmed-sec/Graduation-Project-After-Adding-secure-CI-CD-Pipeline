@@ -7,7 +7,11 @@ import time
 from flask import Flask, request, jsonify, send_from_directory, render_template, make_response, g
 from flask_socketio import SocketIO, emit, join_room, disconnect
 from werkzeug.utils import secure_filename
-from security import SecurityManager
+from security import (
+    SecurityManager,
+    authenticate_registered_agent,
+    load_agent_credential_pepper,
+)
 from db_manager import DBManager
 import urllib3
 import jwt
@@ -60,6 +64,55 @@ def verify_agent(req):
     if not h or not h.startswith("Bearer "): return False
     return security.verify_token(h.split(" ")[1])
 
+def verify_registered_agent_request(req):
+    """
+    Verify an enrolled agent using its own credential.
+
+    Returns the authenticated agent_id on success,
+    or None when authentication fails.
+    """
+    auth_header = req.headers.get("Authorization", "")
+
+    if not isinstance(auth_header, str):
+        return None
+
+    scheme, separator, credential = auth_header.partition(" ")
+
+    if (
+        separator != " "
+        or scheme != "Bearer"
+        or not credential
+        or credential != credential.strip()
+    ):
+        return None
+
+    agent_id = req.headers.get("X-Agent-ID")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+    ):
+        return None
+
+    try:
+        pepper = load_agent_credential_pepper()
+
+        if authenticate_registered_agent(
+            agent_id,
+            credential,
+            db,
+            pepper
+        ):
+            return agent_id
+
+    except Exception:
+        app.logger.warning(
+            "Agent credential verification unavailable"
+        )
+
+    return None
+
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -86,6 +139,23 @@ def admin_required(f):
         except jwt.InvalidTokenError:
             return jsonify({"error": "Invalid or expired token"}), 401
         g.admin_user = payload["user"]
+        return f(*args, **kwargs)
+
+    return decorated
+
+def superadmin_required(f):
+    @wraps(f)
+    @admin_required
+    def decorated(*args, **kwargs):
+        try:
+            role = db.get_admin_role(g.admin_user)
+        except Exception:
+            app.logger.exception("Admin role verification failed")
+            return jsonify({"error": "Authorization unavailable"}), 503
+
+        if role != "SuperAdmin":
+            return jsonify({"error": "Forbidden"}), 403
+
         return f(*args, **kwargs)
 
     return decorated
@@ -297,22 +367,53 @@ def register_agent():
 
 @app.route('/api/v1/heartbeat', methods=['POST'])
 def receive_heartbeat():
-    if not verify_agent(request): return jsonify({"error": "Unauthorized"}), 403
-    agent_id = request.get_json().get('agent_id')
-    if agent_id:
-        db.update_heartbeat(agent_id)
-        task = active_tasks.pop(agent_id, None)
-        return jsonify({"status": "success", "task": task}), 200
-    return jsonify({"error": "Invalid Data"}), 400
+    authenticated_agent_id = verify_registered_agent_request(request)
+
+    if authenticated_agent_id is None:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    requested_agent_id = data.get("agent_id")
+
+    if requested_agent_id != authenticated_agent_id:
+        return jsonify({"error": "Agent identity mismatch"}), 403
+
+    db.update_heartbeat(authenticated_agent_id)
+
+    task = active_tasks.pop(authenticated_agent_id, None)
+
+    return jsonify({
+        "status": "success",
+        "task": task
+    }), 200
 
 @app.route('/api/v1/report_files', methods=['POST'])
 def report_files():
-    if not verify_agent(request): return jsonify({"error": "Unauthorized"}), 403
-    data = request.get_json()
-    if data.get('agent_id') and data.get('data'):
-        file_explorer_results[data.get('agent_id')] = data.get('data')
-        return jsonify({"status": "success"}), 200
-    return jsonify({"error": "Missing data"}), 400
+    authenticated_agent_id = verify_registered_agent_request(request)
+
+    if authenticated_agent_id is None:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    if data.get("agent_id") != authenticated_agent_id:
+        return jsonify({"error": "Agent identity mismatch"}), 403
+
+    file_data = data.get("data")
+
+    if not file_data:
+        return jsonify({"error": "Missing data"}), 400
+
+    file_explorer_results[authenticated_agent_id] = file_data
+
+    return jsonify({"status": "success"}), 200
 
 @app.route('/api/v1/log_threat', methods=['POST'])
 def log_threat():
@@ -723,7 +824,7 @@ def delete_honeyfile():
 def get_admin_users(): return jsonify({"status": "success", "data": db.get_all_admins()}), 200
 
 @app.route('/api/v1/admin/users', methods=['POST'])
-@admin_required
+@superadmin_required
 def add_new_admin():
     data = request.get_json()
     if db.add_admin(data.get('username'), data.get('password'), data.get('role')):
@@ -733,7 +834,7 @@ def add_new_admin():
     return jsonify({"error": "User exists"}), 400
 
 @app.route('/api/v1/admin/users/password', methods=['PUT'])
-@admin_required
+@superadmin_required
 def change_admin_password():
     data = request.get_json()
     db.update_admin_password(data.get('username'), data.get('new_password'))
@@ -744,7 +845,7 @@ def change_admin_password():
     return jsonify({"status": "success"}), 200
 
 @app.route('/api/v1/admin/users/<target_username>', methods=['DELETE'])
-@admin_required
+@superadmin_required
 def delete_admin_user(target_username):
     if target_username == 'admin': return jsonify({"error": "Access Denied"}), 403
     db.delete_admin(target_username)
@@ -757,20 +858,47 @@ def delete_admin_user(target_username):
 @app.route('/api/v1/admin/ai_settings', methods=['GET'])
 @admin_required
 def get_ai_settings():
+    api_key = db.get_setting("ai_api_key")
+
     return jsonify({
-        "api_key": db.get_setting("ai_api_key") or "",
+        "api_key_configured": bool(api_key),
         "model": db.get_setting("ai_model") or "gemini-2.5-flash"
     }), 200
 
 @app.route('/api/v1/admin/ai_settings', methods=['POST'])
-@admin_required
+@superadmin_required
 def save_ai_settings():
-    data = request.get_json()
-    db.update_setting("ai_api_key", data.get("api_key", ""))
-    db.update_setting("ai_model", data.get("model", "gemini-2.5-flash"))
+    data = request.get_json(silent=True)
 
-    username = get_username_from_token(request)
-    db.log_admin_action(username, "Updated AI Settings", "Modified Gemini AI Configuration")
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    if "api_key" in data:
+        api_key = data["api_key"]
+
+        if not isinstance(api_key, str) or not api_key.strip():
+            return jsonify({"error": "Invalid API key"}), 400
+
+    if "model" in data:
+        model = data["model"]
+
+        if not isinstance(model, str) or not model.strip():
+            return jsonify({"error": "Invalid model"}), 400
+
+    if "api_key" not in data and "model" not in data:
+        return jsonify({"error": "No settings provided"}), 400
+
+    if "api_key" in data:
+        db.update_setting("ai_api_key", data["api_key"])
+
+    if "model" in data:
+        db.update_setting("ai_model", data["model"])
+
+    db.log_admin_action(
+        g.admin_user,
+        "Updated AI Settings",
+        "Modified Gemini AI Configuration"
+    )
 
     return jsonify({"status": "success"}), 200
 
@@ -793,12 +921,30 @@ def generate_pdf_report(log_id):
         app.logger.exception("PDF report generation failed")
         return jsonify({"error": "PDF generation failed"}), 500
 @app.route('/api/v1/admin/emergency_action', methods=['POST'])
-@admin_required
+@superadmin_required
 def emergency_containment():
 
-    data = request.get_json()
-    agent_id = data.get('agent_id')
-    action_type = data.get('action')
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    agent_id = data.get("agent_id")
+    action_type = data.get("action")
+
+    if (
+        not isinstance(agent_id, str)
+        or not agent_id
+        or agent_id != agent_id.strip()
+    ):
+        return jsonify({"error": "Invalid agent_id"}), 400
+
+    try:
+        if not db.agent_exists(agent_id):
+            return jsonify({"error": "Agent not found"}), 404
+    except Exception:
+        app.logger.exception("Agent verification failed")
+        return jsonify({"error": "Agent verification unavailable"}), 503
 
     valid_actions = ["ISOLATE_NETWORK", "RESTORE_NETWORK", "ISOLATE_USB", "RESTORE_USB"]
     if action_type not in valid_actions:

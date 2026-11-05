@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
 RUN apt-get update && \
@@ -14,15 +18,22 @@ RUN apt-get update && \
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --disable-pip-version-check \
+    -r requirements.txt
 
 COPY . .
 
-RUN useradd -m serveredr_user
-RUN mkdir -p /app/evidence /app/database && \
-    chown -R serveredr_user:serveredr_user /app/evidence /app/database
+RUN useradd --create-home --shell /usr/sbin/nologin serveredr_user && \
+    mkdir -p /app/evidence /app/database && \
+    chown -R serveredr_user:serveredr_user \
+        /app/evidence /app/database
+
 USER serveredr_user
 
 EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=5s \
+    --start-period=30s --retries=3 \
+    CMD python -c "import socket; socket.create_connection(('127.0.0.1', 5000), timeout=3).close()"
 
 CMD ["python", "app.py"]

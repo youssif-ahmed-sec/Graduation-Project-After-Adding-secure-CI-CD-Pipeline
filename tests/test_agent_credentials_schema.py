@@ -376,5 +376,134 @@ class TestAgentCredentialActivation(unittest.TestCase):
 
                 db._execute_query.assert_not_called()
 
+class TestAdminRoleLookup(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import MagicMock
+
+        source = DB_MANAGER.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        manager = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "DBManager"
+        )
+
+        method = next(
+            node for node in manager.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "get_admin_role"
+        )
+
+        module = ast.Module(body=[method], type_ignores=[])
+        ast.fix_missing_locations(module)
+
+        namespace = {}
+        exec(
+            compile(module, "<admin-role-test>", "exec"),
+            namespace,
+        )
+
+        cls.lookup = staticmethod(namespace["get_admin_role"])
+        cls.MagicMock = MagicMock
+
+    def test_returns_superadmin_role(self):
+        db = self.MagicMock()
+        db._execute_query.return_value = {"role": "SuperAdmin"}
+
+        result = self.lookup(db, "admin-user")
+
+        self.assertEqual(result, "SuperAdmin")
+
+        args, kwargs = db._execute_query.call_args
+
+        self.assertIn("FROM admin_users", args[0])
+        self.assertIn("WHERE username = %s", args[0])
+        self.assertEqual(args[1], ("admin-user",))
+        self.assertEqual(kwargs["fetch"], "one")
+
+    def test_returns_none_for_missing_user(self):
+        db = self.MagicMock()
+        db._execute_query.return_value = None
+
+        self.assertIsNone(self.lookup(db, "unknown-user"))
+
+    def test_rejects_invalid_usernames(self):
+        for username in (None, "", "   ", 123, [], {}):
+            with self.subTest(username=username):
+                db = self.MagicMock()
+
+                self.assertIsNone(self.lookup(db, username))
+                db._execute_query.assert_not_called()
+
+class TestAgentExistence(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import MagicMock
+
+        source = DB_MANAGER.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        manager = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "DBManager"
+        )
+
+        method = next(
+            node for node in manager.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "agent_exists"
+        )
+
+        module = ast.Module(body=[method], type_ignores=[])
+        ast.fix_missing_locations(module)
+
+        namespace = {}
+        exec(
+            compile(module, "<agent-existence-test>", "exec"),
+            namespace,
+        )
+
+        cls.lookup = staticmethod(namespace["agent_exists"])
+        cls.MagicMock = MagicMock
+
+    def test_registered_agent_exists(self):
+        db = self.MagicMock()
+        db._execute_query.return_value = {"?column?": 1}
+
+        result = self.lookup(db, "agent-001")
+
+        self.assertTrue(result)
+
+        args, kwargs = db._execute_query.call_args
+
+        self.assertIn("FROM agents", args[0])
+        self.assertIn("WHERE agent_id = %s", args[0])
+        self.assertEqual(args[1], ("agent-001",))
+        self.assertEqual(kwargs["fetch"], "one")
+
+    def test_unknown_agent_does_not_exist(self):
+        db = self.MagicMock()
+        db._execute_query.return_value = None
+
+        self.assertFalse(self.lookup(db, "unknown-agent"))
+
+    def test_invalid_agent_ids_are_rejected(self):
+        invalid_ids = (
+            None, "", " ", " agent-001", "agent-001 ",
+            123, [], {}
+        )
+
+        for agent_id in invalid_ids:
+            with self.subTest(agent_id=agent_id):
+                db = self.MagicMock()
+
+                self.assertFalse(self.lookup(db, agent_id))
+                db._execute_query.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

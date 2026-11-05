@@ -175,6 +175,29 @@ class DBManager:
             return row
         return False
 
+    def get_admin_role(self, username):
+        """
+        Retrieve the current role directly from the database.
+
+        Used for sensitive authorization decisions rather
+        than trusting potentially stale JWT role claims.
+        """
+        if not isinstance(username, str) or not username.strip():
+            return None
+
+        row = self._execute_query(
+            """
+            SELECT role
+            FROM admin_users
+            WHERE username = %s
+            LIMIT 1
+            """,
+            (username,),
+            fetch="one"
+        )
+
+        return row["role"] if row else None
+
     def get_admin_totp_secret(self, username):
         row = self._execute_query("SELECT totp_secret FROM admin_users WHERE username = %s", (username,), fetch="one")
         return row['totp_secret'] if row and 'totp_secret' in row else None
@@ -309,6 +332,32 @@ class DBManager:
 
     def update_heartbeat(self, agent_id):
         self._execute_query("UPDATE agents SET last_heartbeat = CURRENT_TIMESTAMP, status = 'Online' WHERE agent_id = %s", (agent_id,))
+
+    def agent_exists(self, agent_id):
+        """
+        Check whether an agent is registered.
+
+        This checks database existence only.
+        It does not prove the agent is authenticated or online.
+        """
+        if not isinstance(agent_id, str):
+            return False
+
+        if not agent_id or agent_id != agent_id.strip():
+            return False
+
+        row = self._execute_query(
+            """
+            SELECT 1
+            FROM agents
+            WHERE agent_id = %s
+            LIMIT 1
+            """,
+            (agent_id,),
+            fetch="one"
+        )
+
+        return row is not None
 
     def get_all_agents(self):
         query = "SELECT agent_id, hostname, ip_address, mac_address, os_details, CASE WHEN EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - last_heartbeat)) > 30 THEN 'Offline' ELSE 'Online' END as status, last_heartbeat FROM agents"

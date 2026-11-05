@@ -31,3 +31,16 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Terraform local files and sensitive state
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/crash.log
+**/crash.*.log
+**/*.tfvars
+**/*.tfvars.json
+**/*.tfplan
+
+# Allow safe example variable files
+!**/*.tfvars.example
