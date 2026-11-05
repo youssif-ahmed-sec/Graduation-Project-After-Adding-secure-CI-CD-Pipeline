@@ -169,7 +169,7 @@ jobs:
             ./server
 
       - name: Scan Docker image with Trivy
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: filetrack-mini-edr:ci
           format: table
