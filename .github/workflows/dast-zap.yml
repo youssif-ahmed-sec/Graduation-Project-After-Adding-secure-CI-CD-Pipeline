@@ -30,26 +30,24 @@ jobs:
       - name: Start isolated PostgreSQL and backend
         run: docker compose up -d --build
 
-      - name: Wait for backend HTTP response
+      - name: Wait for backend health endpoint
         shell: bash
         run: |
           set -euo pipefail
 
           for i in $(seq 1 60); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              http://127.0.0.1:5000/ || true)
+              http://127.0.0.1:5000/healthz || true)
 
-            if [[ "$STATUS" == "200" ||
-                  "$STATUS" == "302" ||
-                  "$STATUS" == "404" ]]; then
-              echo "Backend HTTP listener is responding: $STATUS"
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Backend health endpoint returned HTTP 200"
               exit 0
             fi
 
             sleep 2
           done
 
-          echo "Backend did not become reachable"
+          echo "Backend health check failed"
           docker compose ps
           exit 1
 

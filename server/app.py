@@ -58,6 +58,9 @@ def get_initial_config():
 
 GLOBAL_CONFIG = get_initial_config()
 
+@app.get("/healthz")
+def healthz():
+    return jsonify({"status": "ok"}), 200
 
 def verify_agent(req):
     h = req.headers.get('Authorization')
