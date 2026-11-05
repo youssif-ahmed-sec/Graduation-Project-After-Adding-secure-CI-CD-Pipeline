@@ -70,6 +70,13 @@ class DBManager:
                 status TEXT DEFAULT 'Online',
                 last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''',
+            '''CREATE TABLE IF NOT EXISTS agent_credentials (
+                agent_id TEXT PRIMARY KEY REFERENCES agents(agent_id) ON DELETE CASCADE,
+                credential_hash TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                revoked_at TIMESTAMPTZ
+            )''',
             '''CREATE TABLE IF NOT EXISTS security_policies (
                 policy_id SERIAL PRIMARY KEY,
                 user_id INTEGER,
