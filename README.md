@@ -1,233 +1,170 @@
 # 🛡️ FileTrack — Honeyfile-Based Endpoint Detection & Response
 
-**FileTrack** is a Windows-focused endpoint detection and response (EDR) graduation project built around **honeyfiles (decoy files)**. The monorepo combines a Windows endpoint agent, a central Flask/Socket.IO management server backed by PostgreSQL, and a Windows security operations (SOC) desktop console.
+**FileTrack** is a Windows-focused endpoint detection and response (EDR) graduation project using **honeyfiles (decoy files)** to detect suspicious activity. Its monorepo includes a Windows endpoint agent, a Flask/Socket.IO backend with PostgreSQL, and a Windows SOC desktop console.
 
-> **Status (November 2026): Active development / security hardening — not production-ready.** The local security regression suite has **34 passing tests**, and the latest reviewed GitHub Actions run (**Run #7**) passed all **four security jobs**. These results validate the tested checks, **not** end-to-end security, secure enrollment, or production deployment. Do not install the agent on a primary workstation or expose the server publicly.
+> **Project status — November 2026:** Active development and security hardening; **not production-ready**. The latest reviewed feature-branch security pipeline passed **15 GitHub checks** (7 security jobs on push, 7 on pull request, and one API-focused ZAP DAST job on pull request). The most recent local regression run reported **183 tests: 182 passed and 1 skipped**; a PostgreSQL enrollment lifecycle integration test was separately exercised against an isolated database and configured as mandatory in CI. These results apply to tested scenarios only. Do not install the agent on your primary workstation or expose an unprotected server to the internet.
 
 ## Overview
 
-The endpoint agent monitors configured files, detects relevant changes, and can collect evidence under configured response policies. The server receives agent events, stores incident metadata in PostgreSQL, manages administrative endpoints, and generates incident PDF reports. The SOC console presents agents, events, and investigation/response workflows.
+The endpoint agent monitors configured honeyfiles, reports incidents, and can collect evidence under configured policies. The server receives agent events, persists data to PostgreSQL, handles administrative operations, and produces restricted-resource PDF reports. The desktop SOC console supports investigation, agent visibility, and authorized response workflows.
 
-Current engineering priorities are **secure agent identity and authorization**, robust evidence integrity, trusted HTTPS/WSS, and controlled integration testing. A cloud deployment remains part of the future roadmap, **not a completed feature**.
-
-## Monorepo layout
-
-```text
-FileTrack/
-├── .github/
-│   └── workflows/
-│       └── security-tests.yml     # Four GitHub Actions security jobs
-├── admin/                         # Windows SOC desktop application
-│   ├── app/
-│   ├── assets/
-│   ├── components/
-│   ├── ui/
-│   ├── views/
-│   ├── main.py
-│   ├── requirements.txt
-│   └── README.md
-├── agent/                         # Windows endpoint agent
-│   ├── modules/
-│   │   └── watcher.py             # Honeyfile event handling / evidence flow
-│   ├── client.py
-│   ├── security.py
-│   ├── setup_script.iss
-│   └── README.md
-├── server/                        # Flask / Socket.IO / PostgreSQL service
-│   ├── app.py
-│   ├── bootstrap_admin.py
-│   ├── db_manager.py
-│   ├── pdf_renderer.py            # Restricted-resource PDF generation
-│   ├── security.py
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── templates/
-│   └── README.md
-├── tests/
-│   ├── test_agent_safety.py
-│   ├── test_agent_evidence_flow.py
-│   ├── test_atomic_evidence_association.py
-│   ├── test_evidence_path_safety.py
-│   ├── test_pdf_endpoint.py
-│   ├── test_pdf_renderer.py
-│   └── test_threat_logging.py
-├── docker-compose.yml
-├── .gitignore
-└── README.md
-```
-
-For component-specific details, see [`server/README.md`](server/README.md), [`agent/README.md`](agent/README.md), and [`admin/README.md`](admin/README.md). These component documents may need separate updates as development proceeds.
+Some response capabilities can change network connectivity, USB access, or filesystem permissions. **Use disposable Windows VMs and synthetic test data** for any live agent or containment exercise. Only test systems you own or are authorized to assess.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    A[Windows Endpoint Agent] <-->|Agent API + Socket.IO\nTrusted TLS not yet validated| S[Flask / Socket.IO Server]
-    C[Windows SOC Console] <-->|Admin API + Events\nRBAC hardening in progress| S
-    S <--> D[(PostgreSQL)]
-    S --> E[(Forensic Evidence)]
-    S --> P[Restricted PDF Renderer]
-    G[GitHub Actions] --> T[34 Python regression tests]
-    G --> L[Gitleaks secret scanning]
-    G --> M[Semgrep SAST]
-    G --> Q[pip-audit dependency scanning]
+    A[Windows Endpoint Agent] -->|HTTPS/WSS required for deployment| P[Planned TLS reverse proxy]
+    C[Windows SOC Desktop Console] -->|HTTPS/WSS required for deployment| P
+    P -->|Internal service connection| S[Flask + Socket.IO backend]
+    S --> D[(PostgreSQL)]
+    S --> E[(Incident evidence)]
+    S --> R[Restricted PDF renderer]
+    G[GitHub Actions] --> U[Security tests and scanning]
+    G --> Z[Isolated API-focused ZAP DAST]
 ```
 
-**Transport note:** Selected agent and admin HTTP clients now request certificate verification, but an end-to-end trusted HTTPS/WSS deployment and Socket.IO authorization have **not** been validated. The diagram is logical, not a claim of an operational secure production connection.
+**Architecture note:** The TLS reverse proxy shown above is **planned, not deployed**. Current Docker Compose binds the backend to `127.0.0.1:5000` for local/CI testing over HTTP. Agent and admin clients request HTTPS and validate certificates, but end-to-end trusted TLS/WSS has **not** been validated. This diagram does not represent an internet-accessible production deployment.
 
-## Components
+## Repository layout
 
-| Component | Technology | Purpose |
-| --- | --- | --- |
-| **Server** (`server/`) | Python, Flask, Flask-SocketIO, PostgreSQL | Agent registration, incident persistence, administrative APIs, evidence handling, PDF reports, and response coordination |
-| **Endpoint Agent** (`agent/`) | Python, Windows APIs, filesystem monitoring and forensic modules | Honeyfile monitoring, event telemetry, evidence collection, and policy-controlled actions |
-| **SOC Console** (`admin/`) | Python, CustomTkinter | Desktop dashboards for agents, incidents, evidence, and administrative workflows |
-| **Development infrastructure** | Docker Compose | Local containerized server and PostgreSQL, with database access restricted in the reviewed Compose configuration |
-| **Security checks** | `unittest`, Gitleaks, Semgrep, `pip-audit`, GitHub Actions | Regression testing, secret scanning, static analysis, and Python dependency auditing |
+```text
+.github/
+  workflows/security-tests.yml     # Security regression + scanning jobs
+  workflows/dast-zap.yml           # Isolated ZAP automation on pull requests
+  zap-api-plan.yaml                # Safe API requestor / passive scan plan
+admin/                              # Windows SOC desktop console
+agent/                              # Windows endpoint agent and monitoring modules
+server/                             # Flask-Socket.IO server, DB, PDF, container image
+tests/                              # Mocked security tests and DB integration coverage
+infra/k8s/                          # Kubernetes manifests (validation only)
+docker-compose.yml                  # Isolated local backend + PostgreSQL
+README.md
+```
 
-**Safety:** Some response policies can modify files, permissions, network access, USB availability, or collect sensitive evidence. Containment is gated by an explicit opt-in in the reviewed implementation and must remain disabled during ordinary development. Do **not** exercise the agent or its playbooks on a primary machine.
+For component details see [server documentation](server/README.md), [agent documentation](agent/README.md), and [admin documentation](admin/README.md). Some component-level documentation may require corresponding updates.
 
-## Implemented security and DevSecOps work
+## Security controls implemented
 
-| Area | Verified or implemented baseline | Remaining qualification |
-| --- | --- | --- |
-| **Security CI** | Four GitHub Actions jobs passed in the last reviewed Run #7 | Branch protections, deployment gates, and deeper supply-chain assurance not established |
-| **Regression testing** | **34/34 tests passed locally and on GitHub Actions**; covers safety guards, JWT-related behaviors, PDF restrictions, evidence paths, incident linkage, and simulated failure cases | Most tests use AST extraction, Flask test clients, and mocks; not full live integration |
-| **Secret scanning** | Gitleaks runs in CI with a versioned/checksummed release; reviewed run passed | Passing scan cannot guarantee no secrets exist anywhere |
-| **SAST** | Semgrep `p/security-audit` runs against application code in CI; reviewed run passed | Static analysis is not a complete code audit |
-| **Dependency scanning** | `pip-audit` checks `server/requirements.txt` and `admin/requirements.txt` in CI; reviewed run passed | Agent dependencies, containers, and OS packages need dedicated coverage |
-| **Container hardening** | Server image built/tested locally; process uses a non-root user; PostgreSQL configured for development use | Runtime sandboxing, Compose hardening, cloud deployment, and network policy need further validation |
-| **Authentication** | Admin JWT and MFA claim handling strengthened; HMAC-based agent token verification in place | Shared agent secret does **not** authenticate individual devices; RBAC and Socket.IO auth need review |
-| **Remote shell** | Remote-shell execution disabled in reviewed agent/server paths and covered by regression tests | Additional command/task pathways still require authorization review |
-| **Containment** | Certain dangerous response actions require explicit opt-in | Windows permission changes, recovery, and isolated VM testing remain necessary |
-| **Incident evidence linkage** | Agent registers incident first, receives PostgreSQL `log_id`, and uploads evidence against that ID; server checks incident/agent association | Shared-token impersonation, orphan files, and real concurrency scenarios remain risks |
-| **Evidence upload** | Request size limit, filename checks, exclusive file publication, pre-validation of incident, and database attachment handling | No complete transactional file/DB commit; cleanup/reconciliation policy still needed |
-| **PDF reporting** | Replaced `pdfkit`/local-file access with WeasyPrint and restricted external resources; embedded images validated and bounded | Broader rendering and operational tests are still required |
-| **HTTPS/WSS** | Clients configured to request certificate verification in reviewed code | Trusted certificate-backed end-to-end deployment not verified |
-| **Cloud security** | Planning and limited local container controls | No validated AWS production deployment, cloud IAM, or cloud threat-monitoring setup |
+| Area | Current implementation / verified scope |
+| --- | --- |
+| **Agent identity** | Admin-controlled agent approval, credential provisioning, activation, and revocation; unique per-agent credentials instead of a shared time-window token. |
+| **Credential checks** | Server-side HMAC credential fingerprints, tied to agent records and their active/revoked state. The `AGENT_CREDENTIAL_PEPPER` is server-side only. |
+| **REST authorization** | Agent endpoints require the enrolled credential and associated identity; administrative enrollment operations have role/MFA/JWT controls. |
+| **Socket.IO authorization** | Credential-bound agent sessions and authorization checks on covered events; wildcard Socket.IO CORS removed in favor of same-origin policy. A real client handshake integration test is still outstanding. |
+| **Legacy auth removal** | Obsolete shared-token generation and verification code removed; regression tests guard against reintroduction. |
+| **Evidence handling** | Incident-first evidence association, validation of filenames and incident ownership, size limits, and exclusive file publication. Filesystem and database operations are not one atomic transaction. |
+| **PDF reports** | WeasyPrint renderer with external resource restrictions and bounded embedded image data. |
+| **CI / supply chain** | Python security regression tests, Gitleaks, TruffleHog history scan, Semgrep, Python dependency auditing, Terraform/Kubernetes validation, Docker build, and Trivy image scanning. |
+| **DAST** | OWASP ZAP Automation Framework sends explicit safe requests and performs passive analysis against a temporary local backend. |
 
-### Evidence-to-incident association flow
+**Test results are not an independent audit or guarantee that all attack paths are secure.**
 
-The current code implements this logical sequence:
+## Agent enrollment lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant A as Windows Agent
-    participant S as Flask API
-    participant D as PostgreSQL
-    A->>A: Detect event and collect evidence locally
-    A->>S: POST /api/v1/log_threat
-    S->>D: Insert threat log
-    D-->>S: Numeric log_id
-    S-->>A: 200 + log_id
-    A->>S: POST /api/v1/upload_artifact (log_id, agent_id, file)
-    S->>D: Pre-check incident and agent association
-    S->>S: Publish evidence file exclusively
-    S->>D: Lock incident row; append evidence; commit
-    S-->>A: Upload outcome
+    participant Admin as Authorized SuperAdmin
+    participant API as FileTrack API
+    participant DB as PostgreSQL
+    participant Agent as Enrolled Agent
+    Admin->>API: Approve new agent identity
+    API->>DB: Create pending record
+    Admin->>API: Provision credential
+    API->>DB: Store credential fingerprint
+    Admin->>API: Activate credential
+    Agent->>API: Authenticate with agent ID + credential
+    API->>DB: Check fingerprint and active status
+    API-->>Agent: Authorized response or denial
+    Admin->>API: Revoke credential
+    API->>DB: Mark credential revoked
 ```
 
-This replaces the earlier behaviors of attaching evidence to the **latest incident** or collecting **all files modified within 60 seconds**. The database attachment function uses a transaction and `SELECT ... FOR UPDATE`, with unit tests for the query/commit/rollback path.
+The lifecycle was exercised in a disposable PostgreSQL integration test. **Credential delivery, secure Windows storage, rotation, and full real-device testing are still open work.** Do not put a credential in `agent/config.json`, log output, or source control.
 
-**Limitations:** `agent_id` remains client-supplied and is not cryptographically bound to an individual agent credential. The pre-check and final DB update do not make the filesystem and database a single transaction: failed attachments can still leave orphan files. Real PostgreSQL concurrent-upload testing and credential-bound authorization are pending. The earlier automatic screenshot-analysis trigger tied to the 60-second file list was removed; it needs an incident-specific design before re-enablement.
+## Security verification and CI
 
-### PDF report hardening
+The reviewed feature branch included **15 successful checks** on GitHub Actions, comprising:
 
-Incident PDF generation now uses [`server/pdf_renderer.py`](server/pdf_renderer.py) with **WeasyPrint**, rather than `pdfkit` with unrestricted local-file access. The renderer blocks external resources and allows bounded embedded PNG/JPEG data URIs. Report preparation also validates image paths and formats before embedding them. A containerized PDF-render smoke test succeeded locally; this is **not** a complete runtime security assessment.
+- **Security tests (push and pull request):** Python regression and PostgreSQL integration verification, Gitleaks, Semgrep SAST, Python dependency checks, Terraform/Kubernetes validation, TruffleHog, and Docker/Trivy container scanning.
+- **DAST (pull request):** isolated Flask/PostgreSQL backend and OWASP ZAP requestor/passive scan, with a Medium-or-higher finding exit threshold.
 
-## Current priority: per-agent authentication
+The API-focused ZAP plan covers four explicitly specified requests:
 
-The present agent/server token is an HMAC-SHA256 digest of a **five-minute time window**, derived from the environment-provided `AGENT_SECRET_KEY`. The server compares the submitted token with the expected current-window token. All devices sharing that secret can produce the same token; the token does **not** identify which device sent a request, nor does it prevent replay within the window.
+| Request | Expected response |
+| --- | --- |
+| `GET /healthz` | `200` |
+| `POST /api/v1/register` without credential | `403` |
+| `POST /api/v1/heartbeat` without credential | `403` |
+| `POST /api/v1/admin/agents/approve` without JWT | `401` |
 
-Relevant risk areas identified during code review:
+The reviewed ZAP report contained **0 High, 0 Medium, 0 Low, and 0 Informational alerts** across **4 observed endpoints**. This is **limited passive coverage**, not a comprehensive authenticated penetration test or proof that all APIs were scanned. DAST runs on loopback HTTP inside the isolated CI environment and **does not validate TLS**.
 
-- `/api/v1/register` accepts a client-supplied `agent_id` after shared-token verification; database registration uses an upsert.
-- `/api/v1/heartbeat` uses the submitted `agent_id` to update a device and retrieve `active_tasks.pop(agent_id, None)`.
-- Incident creation and evidence upload also use an `agent_id` supplied by the requester.
-- Socket.IO agent connections and task dispatch require a separate identity/authorization review.
+### Non-destructive local validation
 
-**Planned remediation (not implemented):** approved device enrollment; unique, revocable credentials per agent; server-derived authenticated identity; explicit authorization on registration, heartbeat, incidents, evidence, tasks, and Socket.IO; credential rotation and replay resistance. Simply adding `agent_id` to an HMAC generated with a shared key is **not** sufficient.
+Run from the repository root with the test dependencies installed:
 
-## Local development prerequisites
+```powershell
+python -m py_compile .\server\app.py .\server\security.py .\agent\client.py
+python -m unittest discover -s .\tests -p "test_*.py" -q
+git diff --check
+```
 
-- Python **3.13** for the currently reviewed local regression environment (the CI job also uses Python 3.13).
-- Windows for the endpoint agent and SOC console.
-- Docker Desktop / Docker Compose for optional isolated local infrastructure development.
-- Git; component-specific Python dependencies are defined in the corresponding `requirements.txt` files.
+Some tests intentionally log exceptions while checking fail-closed behavior. Use the final test result and process exit code to determine success. The PostgreSQL integration test requires an isolated test database and is skipped locally without its test-specific configuration; CI is configured to run it.
 
-### Environment configuration
+Optional infrastructure syntax checks, **without starting a server or agent**:
 
-Use **locally generated secrets**, supplied through a protected development environment or a Git-ignored `.env` where applicable. For example:
+```powershell
+python -c "import yaml; list(yaml.safe_load_all(open('infra/k8s/server.yaml', encoding='utf-8'))); print('Kubernetes YAML parsed')"
+# docker compose config --quiet requires test-only DB_PASSWORD,
+# JWT_SECRET_KEY, and AGENT_CREDENTIAL_PEPPER environment variables.
+```
+
+## Configuration and secrets
+
+The local backend expects the following secrets to be provided through the environment or an appropriately protected, Git-ignored development configuration:
 
 ```dotenv
 DB_PASSWORD=<generate-locally>
-AGENT_SECRET_KEY=<generate-locally-at-least-32-characters>
-JWT_SECRET_KEY=<generate-locally>
+JWT_SECRET_KEY=<generate-locally-at-least-32-characters>
+AGENT_CREDENTIAL_PEPPER=<generate-locally-at-least-32-characters>
 ```
 
-These are placeholders, **not valid credentials**. Never commit `.env`, real tokens, private keys, `agent/config.json`, forensic evidence, or production data. Do not distribute the server's entire environment file to endpoints. The current shared agent secret is **development-only** and must be replaced before real endpoint rollout.
+These are **placeholders**, not credentials. Other DB connection settings vary by deployment. The Windows agent currently reads its **own unique credential** from `FILETRACK_AGENT_CREDENTIAL`, supplied by the authorized enrollment workflow. Never give the agent the server-side pepper, database password, or JWT signing key.
 
-### Non-destructive local checks
+Do not commit `.env` files, tokens, private keys, forensic evidence, real incident data, user information, or generated local artifacts. **Before changing this repository to Public, review every tracked file and the full Git history for sensitive material, including previously deleted content.** Passing secret scanners reduces risk but does not prove the entire history is safe.
 
-From the repository root, inside an appropriately configured Python virtual environment:
+## Known limitations / release blockers
 
-```powershell
-# Syntax checks only; do not start the server or agent
-python -m py_compile .\server\app.py .\server\db_manager.py .\agent\modules\watcher.py
+- **Trusted TLS/WSS is not deployed or end-to-end tested.** A configured TLS reverse proxy, certificate lifecycle, proper forwarding/WebSocket settings, and safe external ports are needed before remote use.
+- **Secure Windows credential lifecycle is incomplete:** credential delivery, protected local storage, rotation, and recovery need implementation and disposable-device validation.
+- **Socket.IO CORS runtime behavior** needs positive/negative handshake testing; a static policy test alone does not prove compatibility with the desktop console.
+- **DAST is a safe, unauthenticated four-route passive scan**, not deep authenticated API scanning.
+- **Evidence retention, orphan-file reconciliation, concurrency, idempotent incident retries, and broader task authorization** need further review.
+- **Windows containment and response commands** require explicit authorization, strong safety gates, and rollback tests in isolated VMs.
+- **Cloud hosting, production secrets management, and production readiness** are not claimed.
 
-# Isolated regression suite (mocks / test clients; no live agent required)
-python -m unittest discover -s tests -p "test_*.py" -v
+## Public repository checklist
 
-# Git whitespace validation
-git diff --check
+Before making the repository public:
 
-# Compose validation, without starting containers (optional)
-docker compose config --quiet
-```
+1. Review **all tracked files and Git history** for secrets, device metadata, credentials, sensitive domain/account details, evidence, and proprietary assets. Revoke/rotate any exposed real secret; deleting it from the latest commit is not enough.
+2. Verify `.gitignore` and ensure no local `.env`, DB dumps, logs, screenshots/evidence, build artifacts, or installer secrets are tracked.
+3. Decide on a license and ownership/redistribution permissions for code, assets, and dependencies. Do not claim an open-source license until one has actually been added.
+4. Review the feature PR and completed checks, including the mandatory PostgreSQL integration test; merge only after approval.
+5. Change visibility only after the audit, then verify what an unauthenticated visitor can download (including historical commits and GitHub Releases/Actions artifacts where applicable).
 
-The test environment needs the dependencies used by the suite (including Flask, PyJWT, Pillow, WeasyPrint, and `requests`). The CI workflow installs its own required test dependencies. Some tests intentionally log simulated exceptions while still passing; rely on the final `OK` / exit status and individual assertions, not the absence of error messages.
+Making **source code public is separate from deploying a live server**. This project is currently intended for educational review, not real endpoint rollout.
 
-**Do not** start the Windows agent, run response playbooks, or expose the Flask server as part of a quick-start verification. Authorized, disposable test environments and explicit safety controls are required for live integration tests.
+## Documentation
 
-## CI security workflow
-
-The workflow at [`.github/workflows/security-tests.yml`](.github/workflows/security-tests.yml) runs on repository events configured in that file and currently has **four jobs**:
-
-1. **Security regression tests:** Python syntax checks and `unittest` discovery; **34 tests passed** in the reviewed GitHub run.
-2. **Gitleaks secret scanning:** scans repository content with a pinned release and verified download checksum.
-3. **Semgrep SAST:** static security-audit rules against application code.
-4. **Dependency scanning:** `pip-audit` on the **server and admin** Python requirements.
-
-**Last reviewed result:** GitHub Actions **Run #7 — all 4 jobs successful** after adding `requests` to the regression job dependencies. The number of tests and run status refer to that observed result; subsequent runs may differ.
-
-Passing CI does **not** establish that the full application has been penetration-tested or that a deployment is safe. Container scanning, agent dependency coverage, repository protections, deployment approvals, and integration/security tests remain future work.
-
-## Cloud security roadmap
-
-No completed AWS production deployment is claimed. Planned work includes least-privilege IAM identities, restricted inbound access and segmented/private networking, reliable secrets provisioning/rotation, trusted HTTPS/WSS, encryption and backups, centralized logs and alerting, image and infrastructure scanning, patching, and an approval-gated delivery pipeline. Any infrastructure validation should take place in an authorized, isolated test environment.
-
-## Known limitations and safe-use guidance
-
-- **Per-agent authentication and enrollment are not implemented.** The shared HMAC token can permit agent ID spoofing and unauthorized access to another agent's incident/task context if the secret is known.
-- **Task authorization needs hardening:** `/heartbeat` looks up tasks using client-supplied `agent_id`; `active_tasks` is an in-memory store, not a durable audited queue.
-- **Socket.IO and admin authorization require review:** authenticated room joins, RBAC, role-based task permissions, and session lifecycle enforcement are not yet fully established.
-- **Orphan evidence remains possible:** a file can be published before the final database association fails. File/DB reconciliation, retention, and cleanup need a defined design.
-- **Real integration tests are outstanding:** unit tests with mocks do not prove PostgreSQL concurrency behavior, full server-to-agent protocol compatibility, or trusted TLS/WSS connectivity.
-- **Incident delivery is not fully idempotent:** a lost HTTP response after a committed incident can leave local evidence unuploaded or cause duplicates during future retries unless event IDs and retry semantics are designed.
-- **Evidence type is inferred from filename prefixes** in the reviewed upload endpoint; it should be checked against an explicit, validated evidence schema.
-- **Forensic data may be sensitive:** evidence should be minimized, controlled, auditable, and retained only as justified.
-- **Windows response actions are high-risk:** network/USB containment, `icacls` permission changes, and file recovery require isolated tests, rollback plans, and explicit authorization.
-- **Cloud controls remain planned**, not deployed or independently verified.
-
-**Use only in environments you own or are authorized to test.** Prefer disposable Windows VMs, synthetic incidents/evidence, and a dedicated development database. Do not enable containment or run the EDR agent on a primary computer.
-
-## Project documentation
-
-- [Server documentation](server/README.md)
-- [Agent documentation](agent/README.md)
-- [Admin console documentation](admin/README.md)
-- [Security tests](tests/)
-- [GitHub Actions workflow](.github/workflows/security-tests.yml)
+- [Server](server/README.md)
+- [Windows Agent](agent/README.md)
+- [SOC Console](admin/README.md)
+- [Security Test Suite](tests/)
+- [Security CI](.github/workflows/security-tests.yml)
+- [ZAP DAST Workflow](.github/workflows/dast-zap.yml)
+- [ZAP API Plan](.github/zap-api-plan.yaml)
 
 ## Author
 
@@ -235,4 +172,4 @@ No completed AWS production deployment is claimed. Planned work includes least-p
 
 ---
 
-*FileTrack is a development-stage security engineering project. The status above records reviewed implementation and test results as of November 2026; it is not a certification or a production-readiness claim.*
+*FileTrack remains an educational, development-stage security engineering project. Successful CI and DAST checks validate limited scenarios; they do not constitute a certification or production security assessment.*
