@@ -609,13 +609,14 @@ class TestEvidencePathSafety(unittest.TestCase):
         test_app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
         fake_db = Mock()
+        fake_agent_auth = Mock(return_value="test-agent")
 
         namespace = {
             "app": test_app,
             "request": request,
             "jsonify": jsonify,
             "secure_filename": secure_filename,
-            "verify_agent": lambda req: True,
+            "verify_registered_agent_request": fake_agent_auth,
             "tempfile": tempfile,
             "os": os,
             "db": fake_db,
@@ -635,6 +636,55 @@ class TestEvidencePathSafety(unittest.TestCase):
             view_func=namespace["upload_artifact"],
             methods=["POST"],
         )
+
+        # Reject uploads when the agent credential is invalid.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            namespace["EVIDENCE_FOLDER"] = temp_dir
+            fake_db.reset_mock()
+            fake_agent_auth.return_value = None
+
+            with test_app.test_client() as client:
+                response = client.post(
+                    "/api/v1/upload_artifact",
+                    data={
+                        "agent_id": "test-agent",
+                        "log_id": "42",
+                        "file": (
+                            io.BytesIO(b"test-content"),
+                            "evidence.png",
+                        ),
+                    },
+                )
+
+            self.assertEqual(response.status_code, 403)
+            fake_db.incident_exists_for_agent.assert_not_called()
+            self.assertEqual(os.listdir(temp_dir), [])
+
+        # Reject attempts to upload evidence for another agent.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            namespace["EVIDENCE_FOLDER"] = temp_dir
+            fake_db.reset_mock()
+            fake_agent_auth.return_value = "agent-a"
+
+            with test_app.test_client() as client:
+                response = client.post(
+                    "/api/v1/upload_artifact",
+                    data={
+                        "agent_id": "agent-b",
+                        "log_id": "42",
+                        "file": (
+                            io.BytesIO(b"test-content"),
+                            "evidence.png",
+                        ),
+                    },
+                )
+
+            self.assertEqual(response.status_code, 403)
+            fake_db.incident_exists_for_agent.assert_not_called()
+            self.assertEqual(os.listdir(temp_dir), [])
+
+        # Restore the authenticated identity for existing test cases.
+        fake_agent_auth.return_value = "test-agent"
 
         cases = [
             ("success", True, 200),

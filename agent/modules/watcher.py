@@ -161,7 +161,7 @@ class HoneyFileHandler(FileSystemEventHandler):
             response = requests.post(
                 f"{self.agent.base_url}/log_threat",
                 json=alert_payload,
-                headers=self.agent.get_secure_headers(),
+                headers=self.agent.get_enrolled_agent_headers(),
                 verify=True,
                 timeout=60,
             )
@@ -202,7 +202,7 @@ class HoneyFileHandler(FileSystemEventHandler):
                                 "type": ev_type,
                                 "log_id": str(server_log_id),
                             },
-                            headers=self.agent.get_secure_headers(),
+                            headers=self.agent.get_enrolled_agent_headers(),
                             verify=True,
                             timeout=120,
                         )

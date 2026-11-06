@@ -26,7 +26,6 @@ services:
       DB_NAME: filetrack_db
       DB_USER: youssifahmed
       DB_PASS: ${DB_PASSWORD:?DB_PASSWORD is required}
-      AGENT_SECRET_KEY: ${AGENT_SECRET_KEY:?AGENT_SECRET_KEY is required}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       AGENT_CREDENTIAL_PEPPER: ${AGENT_CREDENTIAL_PEPPER:?AGENT_CREDENTIAL_PEPPER is required}
     depends_on:

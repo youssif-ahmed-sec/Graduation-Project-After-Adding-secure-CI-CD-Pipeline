@@ -28,6 +28,7 @@ class TestThreatLogging(unittest.TestCase):
         self.app = Flask(__name__)
         self.fake_db = Mock()
         self.fake_socketio = Mock()
+        self.fake_agent_auth = Mock(return_value="test-agent")
 
         namespace = {
             "request": request,
@@ -36,7 +37,7 @@ class TestThreatLogging(unittest.TestCase):
             "db": self.fake_db,
             "socketio": self.fake_socketio,
             "app": self.app,
-            "verify_agent": lambda req: True,
+            "verify_registered_agent_request": self.fake_agent_auth,
         }
 
         exec(
@@ -157,6 +158,68 @@ class TestThreatLogging(unittest.TestCase):
 
         self.fake_db.log_threat.assert_called_once()
         self.fake_socketio.emit.assert_called_once()
+
+    def test_missing_agent_credential_is_rejected(self):
+        self.fake_agent_auth.return_value = None
+
+        with self.app.test_client() as client:
+            response = client.post(
+                "/api/v1/log_threat",
+                json=self.payload,
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.fake_db.log_threat.assert_not_called()
+        self.fake_socketio.emit.assert_not_called()
+
+    def test_agent_cannot_impersonate_another_agent(self):
+        self.fake_agent_auth.return_value = "agent-a"
+
+        malicious_payload = {
+            **self.payload,
+            "agent_id": "agent-b",
+        }
+
+        with self.app.test_client() as client:
+            response = client.post(
+                "/api/v1/log_threat",
+                json=malicious_payload,
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.fake_db.log_threat.assert_not_called()
+        self.fake_socketio.emit.assert_not_called()
+
+    def test_invalid_json_body_is_rejected(self):
+        with self.app.test_client() as client:
+            response = client.post(
+                "/api/v1/log_threat",
+                data="not valid json",
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.fake_db.log_threat.assert_not_called()
+
+    def test_logged_threat_uses_authenticated_agent_identity(self):
+        self.fake_db.log_threat.return_value = 42
+
+        with self.app.test_client() as client:
+            response = client.post(
+                "/api/v1/log_threat",
+                json=self.payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+
+        saved_data = self.fake_db.log_threat.call_args.args[0]
+
+        self.assertEqual(
+            saved_data["agent_id"],
+            "test-agent",
+        )
+
+        self.fake_agent_auth.assert_called_once()
 
 
 if __name__ == "__main__":

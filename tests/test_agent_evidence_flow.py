@@ -91,8 +91,9 @@ class TestAgentEvidenceFlow(unittest.TestCase):
         self.agent = SimpleNamespace(
             agent_id="test-agent",
             base_url="https://test.invalid/api/v1",
-            get_secure_headers=lambda: {
-                "Authorization": "Bearer test-only-token"
+            get_enrolled_agent_headers=lambda: {
+                "Authorization": "Bearer test-agent-credential",
+                "X-Agent-ID": "test-agent",
             },
         )
 
